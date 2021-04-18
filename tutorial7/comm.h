@@ -1,6 +1,7 @@
 #ifndef COMM_H
 #define COMM_H
 
+#include<iostream>
 #include <math.h>
 #include <omp.h>
 #include "mpi.h"
@@ -14,6 +15,19 @@
 
 double g_commTime{0}, g_setupTime{0};
 
+//A big time lesson here: Obvious factor in MPI communication is to have a common MPI_Comm in send and recv, but when
+//comm is part of an object instance, a new comm will be created for every object. Sometimes new comm pair correctly
+//in send-recv, some time it does not. So creating a common global MPI_Comm for everyone. Obvious but can be missed easily
+
+MPI_Comm comm; //2D comm used for Cartesian arrangement
+
+void createCartComm(int q){
+	//create square grid of MPI processes. MPI_Cart_create will be repeated for every block. Fix later create a static class.
+	int dims[2] = {q,q};
+	int periods[2] = {1,1};
+	MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &comm);
+}
+
 //TODO: Figure out how to call destroyComm from MatrixBlockData. Currently not called causing a memory leak
 //TODO: Assuming square block size and Row major order for now. Fix later
 template<class MatrixType, char Id> //Id should have values 'a' or 'b'
@@ -26,7 +40,6 @@ public:
 	int rank, src, dest; //self rank, source and destination ranks for this particular block
 	int n, q, leadingDimension;  //n is block size, q is sqrt(num of ranks), and leadingDimension is num of columns in local matrix patch.
 	int tag; //tag to be used for mpi comm;
-	MPI_Comm comm; //2D comm used for Cartesian arrangement
 	//struct timeval  tv1, tv2;
 
 	CommPackage() = default;
@@ -40,6 +53,7 @@ public:
 		n = _n;
 		leadingDimension = _leadingDimension;
 		tag = _rowIdx * (leadingDimension / n) + _colIdx; //this is basically the position of the block in the local patch. This will give unique tags to each block. leadingDimension / n gives num of blocks along x dimension
+		tag = 2*tag + Id == 'a' ? 0 : 1;
 		int size;
 		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 		MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -49,11 +63,6 @@ public:
 		sendbuff=new MatrixType[n*n];
 		recvbuff=new MatrixType[n*n];
 
-		//create square grid of MPI processes. MPI_Cart_create will be repeated for every block. Fix later create a static class.
-		int dims[2] = {q,q};
-		int periods[2] = {1,1};
-		MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &comm);
-
 		if(Id=='a'){
 			MPI_Cart_shift(comm, ALONG_ROWS, -1, &src, &dest);	//get source and destination for A and B. displacement for both is -1 i.e. either to left or up and by 1 element in grid.
 			align(ALONG_ROWS, - (rank/q));	//do the initial alignment of tiles
@@ -62,10 +71,7 @@ public:
 			MPI_Cart_shift(comm, ALONG_COLS, -1, &src, &dest);
 			align(ALONG_COLS, - (rank%q));
 		}
-		//else
-		//	printf("error %s %d\n", __FILE__, __LINE__);
 
-//#pragma omp parallel for
 		for(int i = 0; i<n; i++) //copy values into send buffer for the first send
 			for(int j = 0; j<n; j++)
 				sendbuff[i*n+j] = data[i*leadingDimension+j];
@@ -80,33 +86,29 @@ public:
 	{
 		assert(Id == 'a' || Id == 'b');
 		//gettimeofday(&tv1, NULL);
-		MPI_Status status;	//use non blocking calls to avoid hang.
-		MPI_Request reqs[2];
-		MPI_Status stats[2];
 
 			//copy data to sendbuff
-//#pragma omp parallel for
 			for(int i = 0; i<n; i++)
 				for(int j = 0; j<n; j++)
 					sendbuff[i*n+j] = data[i*leadingDimension+j];
 
 
-		int source , dest;
-		MPI_Cart_shift(comm, direction, shift_by, &source, &dest);
-		//int rank;
-		//MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-		//cout << rank << " " << " source: " << source <<  " des: " <<dest <<"\n";
+		int s , d;
+		MPI_Cart_shift(comm, direction, shift_by, &s, &d);
+//		int rank;
+//		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+//		std::cout << rank << " Id: " << Id << " source: " << s <<  " des: " <<d << " tag: " << tag << "\n";
 
-		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_CHAR, dest, tag, comm, &reqs[0]);
-		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_CHAR, source, tag, comm, &reqs[1]);
+		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_BYTE, d, tag, comm, &reqs[0]);
+		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_BYTE, s, tag, comm, &reqs[1]);
 		MPI_Waitall(2, reqs, stats);	//wait till data is sent and received
+//		printf("%d Aligned for block %c - %d size: %d x %d\n", rank, Id, tag, n, n);
 
 		//gettimeofday(&tv2, NULL);
 		//double seconds = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
 		//g_setupTime += seconds;
 
 			//copy data from recvbuff
-//#pragma omp parallel for
 			for(int i = 0; i<n; i++)
 				for(int j = 0; j<n; j++)
 					data[i*leadingDimension+j] = recvbuff[i*n+j];
@@ -116,8 +118,8 @@ public:
 	{
 		assert(Id == 'a' || Id == 'b');
 		//gettimeofday(&tv1, NULL);
-		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_CHAR, dest, tag, comm, &reqs[0]);	//send
-		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_CHAR, src, tag, comm, &reqs[1]);	//receive
+		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_BYTE, dest, tag, comm, &reqs[0]);	//send
+		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_BYTE, src, tag, comm, &reqs[1]);	//receive
 
 #ifndef OVERLAP_COMM
 		MPI_Waitall(2, reqs, stats);	//wait for all transfers to complete
@@ -142,7 +144,6 @@ public:
 #endif
 
 		//copy received A and B from recieved buffer to A and B
-	//#pragma omp parallel for
 		for(int i = 0; i<n; i++)
 			for(int j = 0; j<n; j++)
 				data[i*leadingDimension+j] = recvbuff[i*n+j];
@@ -162,8 +163,6 @@ public:
 			align(ALONG_ROWS, (rank/q));
 		else if (Id=='b')
 			align(ALONG_COLS, (rank%q));
-		//else
-		//	printf("error %s %d\n", __FILE__, __LINE__);
 		
 		delete []sendbuff;
 		delete []recvbuff;

@@ -101,9 +101,9 @@ void inline verifyProduct(double* correct, double *hh, int n, int rank)
 
 void matMult(double *A, double *B, double *C, int n, int q) //Cannon's Algorithm. without HH
 {
-	CommPackage<double, 'a'> cpackA; //create and init comm package.
+	CommPackage<double, 'a'> cpackA; //create and init comm packages for matrices A and B.
 	CommPackage<double, 'b'> cpackB;
-	cpackA.setupCommPackage(A, n, n, 0, 0); //patch is not divided into blocks. So the blockSize = leading dimnesion = n and rowId=colId =0
+	cpackA.setupCommPackage(A, n, n, 0, 0); //patch is not divided into blocks. So the blockSize = leading dimension = n and rowId=colId =0
 	cpackB.setupCommPackage(B, n, n, 0, 0);
 
 	for(int k=0; k<q; k++)	//main loop of Cannon's Algorithm. running it from 0 to q rather than 1 to q, otherwise we miss multiplication of 1 block.
@@ -342,6 +342,9 @@ int main(int argc, char **argv) {
 	  return(0);
   }
 
+  //--------------------------------- Create a common MPI comm -----------------------------------------------
+  createCartComm(q);
+
   //--------------------------------- Allocate and init the matrices -----------------------------------------------
   MatrixType *dataA = initMatrix(n * m);
   MatrixType *dataB = initMatrix(m * p);
@@ -351,9 +354,11 @@ int main(int argc, char **argv) {
   //--------------------------------- distributed DGEMM -----------------------------------------------
   if(verify){
 	  memset(dataC, 0, n*n*sizeof(MatrixType)); //reset C to verify.
-	  //matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, dataA, dataB, dataC);
+	  //printf("running HH:\n");
+	  matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, dataA, dataB, dataC);
 	  MatrixType *C = initMatrix(n * p);
 	  memset(C, 0, n*n*sizeof(MatrixType));
+	  //printf("running no HH:\n");
 	  matMult(dataA, dataB, C, n, q);
 	  verifyProduct(C, dataC, n, rank);
   }
@@ -365,7 +370,7 @@ int main(int argc, char **argv) {
 		  gettimeofday(&tv1, NULL);
 
 		  //call matrix multiply
-		  //matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, dataA, dataB, dataC);
+		  matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, dataA, dataB, dataC);
 
 		  gettimeofday(&tv2, NULL);
 		  seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
