@@ -78,24 +78,24 @@ MatrixType * initMatrix(size_t n) // n should be rows*cols
 
 void inline verifyProduct(double* correct, double *hh, int n, int rank)
 {
-//	for(int i=0; i<n; i++){
-//		for(int j=0; j<n; j++){
-//			if(fabs(hh[i*n + j] - correct[i*n + j]) > 1e-9 ){
-//				printf("########## Output does not match. Error in %s %d: at cell (%d, %d) -> correct: %f \t computed:%f \t diff: %f\n"
-//						, __FILE__, __LINE__, i, j, correct[i*n + j], hh[i*n + j], fabs(hh[i*n + j] - correct[i*n + j]));
-//				exit(1);
-//			}
-//		}
-//	}
-//	printf("output matched for rank %d!! C:\n", rank);
-
-	sleep(rank);
-	printf("output of rank: %d\n", rank);
 	for(int i=0; i<n; i++){
-		for(int j=0; j<n; j++)
-			printf("%f\t", correct[i*n+j]);
-		printf("\n");
+		for(int j=0; j<n; j++){
+			if(fabs(hh[i*n + j] - correct[i*n + j]) > 1e-9 ){
+				printf("########## Output does not match. Error in %s %d: at cell (%d, %d) -> correct: %f \t computed:%f \t diff: %f\n"
+						, __FILE__, __LINE__, i, j, correct[i*n + j], hh[i*n + j], fabs(hh[i*n + j] - correct[i*n + j]));
+				exit(1);
+			}
+		}
 	}
+	printf("output matched for rank %d!! C:\n", rank);
+
+//	sleep(rank);
+//	printf("output of rank: %d\n", rank);
+//	for(int i=0; i<n; i++){
+//		for(int j=0; j<n; j++)
+//			printf("%f\t", correct[i*n+j]);
+//		printf("\n");
+//	}
 }
 
 
@@ -125,74 +125,88 @@ void matMult(double *A, double *B, double *C, int n, int q) //Cannon's Algorithm
 	cpackB.destroyComm();
 }
 
-
-template<class Type, char Id, Order Ord = Order::Row, class MatrixBlockDataSP = std::shared_ptr<MatrixBlockData<Type, Id, Ord>>>
-class commInitTask : public hh::AbstractTask<MatrixBlockDataSP, MatrixBlockDataSP> {
+//input from traversal task and pass it on to finalize and also product
+template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
+class commInitTask : public hh::AbstractTask<MBD, MBD> {
 public:
-	commInitTask(std::string_view const &name, size_t numberThreads)
-	: hh::AbstractTask<MatrixBlockDataSP, MatrixBlockDataSP>(name, numberThreads) {}
+	commInitTask() : hh::AbstractTask<MBD, MBD>("commInit_" + Id) {}
 
-	void execute(MatrixBlockDataSP matBlock) override {
+	void execute(std::shared_ptr<MBD> matBlock) override {
+		printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
 		matBlock->initializeComm();
 		this->addResult(matBlock); //push result
 	}
 
-	std::shared_ptr<hh::AbstractTask<MatrixBlockDataSP, MatrixBlockDataSP>> copy() override {
-		return std::make_shared<commInitTask>(this->name(), this->numberThreads());
+	std::shared_ptr<hh::AbstractTask<MBD, MBD>> copy() override {
+		printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
+		return std::make_shared<commInitTask<Type, Id, Ord>>();
 	}
 };
 
-//needs A / B and P. pass numOfBlocks.
-template<class Type, char Id, Order Ord = Order::Row, class MatrixBlockDataSP = std::shared_ptr<MatrixBlockData<Type, Id, Ord>>>
-class commFinalizeTask : public hh::AbstractTask<MatrixBlockDataSP, MatrixBlockDataSP, std::shared_ptr<MatrixBlockData<Type, 'p', Ord>>> {
+//needs A / B from init task. Just save A / B passed on by init.
+//Second input is partial matrix p from product Task. Decrement ttl for every input from productTask. Finalize comm when ttl reaches 0
+template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
+class commFinalizeTask : public hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'p', Ord>> {
 public:
-	int numOfBlocks, numOfBlocksCopy; //call finalizeComm only when numOfBlocks reach 0.
-	MatrixBlockDataSP matBlock{NULL};
-	commFinalizeTask(std::string_view const &name, size_t numberThreads, int _numOfBlocks)
-	: hh::AbstractTask<MatrixBlockDataSP, MatrixBlockDataSP>(name, numberThreads) {
-		 numOfBlocks = _numOfBlocks-1;
-		 numOfBlocksCopy = _numOfBlocks-1;
+	//call finalizeComm only when ttl (time to live) reaches 0.
+	//ttl for mat A is num of blocks along x dim in mat B (because each block in A will be needed those many times)
+	//similary ttl for mat B is num of blocks along y dim in mat A
+	int ttl, ttlCopy;
+	std::shared_ptr<MBD> matBlock{NULL};
+	commFinalizeTask(int _ttl) : hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'p', Ord>>("commFinalize_" + Id) {
+		ttl = _ttl;
+		ttlCopy = ttl;
 	}
 
-	void execute(MatrixBlockDataSP _matBlock) override {
+	void execute(std::shared_ptr<MBD> _matBlock) override {
+		printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
 		matBlock = _matBlock;
 	}
 
 	void execute(std::shared_ptr<MatrixBlockData<Type, 'p', Ord>> partialResult) override {//partialResult is unused here, but it ensures product is completed
-		numOfBlocks--;
-		if(numOfBlocks==0){
-			numOfBlocks = numOfBlocksCopy; //restore for the next Cannon's iteration
+		printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
+		ttl--;
+		if(ttl==0){
+			printf("Executing task: '%s', function '%s' at %s:%d : ttl 0, pushing data\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
+			ttl = ttlCopy; //restore for the next Cannon's iteration
 			matBlock->finalizeComm();
 			this->addResult(matBlock); //push result
 		}
 	}
 
-	std::shared_ptr<hh::AbstractTask<MatrixBlockDataSP, MatrixBlockDataSP>> copy() override {
-		return std::make_shared<commFinalizeTask>(this->name(), this->numberThreads());
+	std::shared_ptr<hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'p', Ord>>> copy() override {
+		printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
+		return std::make_shared<commFinalizeTask>(this->ttl);
 	}
 };
 
-template<class Type, char Id, Order Ord = Order::Row, class MatrixBlockDataSP = std::shared_ptr<MatrixBlockData<Type, Id, Ord>>>
-class CannonState : public hh::AbstractState<MatrixBlockDataSP, MatrixBlockDataSP> {
+template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
+class CannonState : public hh::AbstractState<MBD, MBD> {
 	int q; //q = sqrt(p);
 public:
 	CannonState(int _q) : q(_q-1) {}
-	bool isDone() { return q == 0; };
-	void execute(MatrixBlockDataSP inputparams) override {
+	bool isDone() {
+		printf("Executing task: '%s', function '%s' at %s:%d, q: %d\n", "cannon state", __FUNCTION__,  __FILE__, __LINE__, q ) ;
+		return q == 0;
+	};
+
+	void execute(std::shared_ptr<MBD> inputparams) override {
+		printf("Executing task: '%s', function '%s' at %s:%d, q: %d\n", "cannon state", __FUNCTION__,  __FILE__, __LINE__, q ) ;
 		q--;
 		this->push(inputparams); //push result
 	}
 };
 
-template<class Type, char Id, Order Ord = Order::Row, class MatrixBlockDataSP = std::shared_ptr<MatrixBlockData<Type, Id, Ord>>>
-class CannonStateManager : public hh::StateManager<MatrixBlockDataSP, MatrixBlockDataSP> {
+template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
+class CannonStateManager : public hh::StateManager<MBD, MBD> {
 public:
 	explicit CannonStateManager(std::shared_ptr<CannonState<Type, Id, Ord>> const &state) :
-	hh::StateManager<MatrixBlockDataSP, MatrixBlockDataSP>("output State Manager", state, false) {}
+	hh::StateManager<MBD, MBD>("output State Manager_" + Id, state, false) {}
 
 	bool canTerminate() override {
+		printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
 		this->state()->lock();
-		auto ret = std::dynamic_pointer_cast<CannonState>(this->state())->isDone();
+		auto ret = std::dynamic_pointer_cast<CannonState<Type, Id, Ord>>(this->state())->isDone();
 		this->state()->unlock();
 		return ret;
 	}
@@ -210,9 +224,14 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto matrixB = std::make_shared<MatrixData<MatrixType, 'b', Ord>>(m, p, blockSize, dataB);
 	auto matrixC = std::make_shared<MatrixData<MatrixType, 'c', Ord>>(n, p, blockSize, dataC);
 
-	size_t nBlocks = std::ceil(n / blockSize) + (n % blockSize == 0 ? 0 : 1);
-	size_t mBlocks = std::ceil(m / blockSize) + (m % blockSize == 0 ? 0 : 1);
-	size_t pBlocks = std::ceil(p / blockSize) + (p % blockSize == 0 ? 0 : 1);
+	//multiply num of blocks by q to gettotal number of blocks globally
+//	size_t nBlocks = (n + blockSize - 1) / blockSize * q;
+//	size_t mBlocks = (m + blockSize - 1) / blockSize * q;
+//	size_t pBlocks = (p + blockSize - 1) / blockSize * q;
+
+	size_t nBlocks = (std::ceil(n / blockSize) + (n % blockSize == 0 ? 0 : 1)) * q;
+	size_t mBlocks = (std::ceil(m / blockSize) + (m % blockSize == 0 ? 0 : 1)) * q;
+	size_t pBlocks = (std::ceil(p / blockSize) + (p % blockSize == 0 ? 0 : 1)) * q;
 
 	// Graph
 	auto matrixMultiplicationGraph = hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>,
@@ -224,22 +243,36 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto taskTraversalA = std::make_shared<MatrixRowTraversalTask<MatrixType, 'a', Ord>>();
 	auto taskTraversalB = std::make_shared<MatrixColumnTraversalTask<MatrixType, 'b', Ord>>();
 	auto taskTraversalC = std::make_shared<MatrixRowTraversalTask<MatrixType, 'c', Ord>>();
-	auto productTask = std::make_shared<ProductTask<MatrixType, Ord>>(numberThreadProduct, p);
+
+	auto taskCommInitA = std::make_shared<commInitTask<MatrixType, 'a', Ord>>();
+	auto taskCommInitB = std::make_shared<commInitTask<MatrixType, 'b', Ord>>();
+
+	auto productTask = std::make_shared<ProductTask<MatrixType, Ord>>(numberThreadProduct, p * q);
+
+	auto taskCommFinalizeA = std::make_shared<commFinalizeTask<MatrixType, 'a', Ord>>(nBlocks/q); //ToDO: change nBlocks to correct m / p blocks
+	auto taskCommFinalizeB = std::make_shared<commFinalizeTask<MatrixType, 'b', Ord>>(nBlocks/q); //ToDO: change nBlocks to correct m / p blocks
+
 	auto additionTask = std::make_shared<AdditionTask<MatrixType, Ord>>(numberThreadAddition);
 
 	// State
 	auto stateInputBlock = std::make_shared<InputBlockState<MatrixType, Ord>>(nBlocks, mBlocks, pBlocks);
 	auto statePartialComputation = std::make_shared<PartialComputationState<MatrixType, Ord>>(nBlocks, pBlocks, nBlocks * mBlocks * pBlocks);
 	auto stateOutput = std::make_shared<OutputState<MatrixType, Ord>>(nBlocks, pBlocks, mBlocks);
+	auto stateCannonA = std::make_shared<CannonState<MatrixType, 'a', Ord>>(q);
+	auto stateCannonB = std::make_shared<CannonState<MatrixType, 'b', Ord>>(q);
+	//output state and state manager required to carry out loops of Cannon's algorithm
 
+	// StateManager
 	typedef std::pair<std::shared_ptr<MatrixBlockData<MatrixType, 'a', Ord>>,
 			std::shared_ptr<MatrixBlockData<MatrixType, 'b', Ord>>> stateManagerInputBlockOutput;
-	// StateManager
 	auto stateManagerInputBlock = std::make_shared<hh::StateManager<stateManagerInputBlockOutput, // Pair of block as output
 			MatrixBlockData<MatrixType, 'a', Ord>, MatrixBlockData<MatrixType, 'b', Ord>> // Block as Input
 			>("Input State Manager", stateInputBlock);
 
 	auto stateManagerPartialComputation = std::make_shared<PartialComputationStateManager<MatrixType, Ord>>(statePartialComputation);
+
+	auto stateManagerCannonA = std::make_shared<CannonStateManager<MatrixType, 'a', Ord>>(stateCannonA);
+	auto stateManagerCannonB = std::make_shared<CannonStateManager<MatrixType, 'b', Ord>>(stateCannonB);
 
 	auto stateManagerOutputBlock =
 			std::make_shared<hh::StateManager<
@@ -250,14 +283,32 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.input(taskTraversalA);
 	matrixMultiplicationGraph.input(taskTraversalB);
 	matrixMultiplicationGraph.input(taskTraversalC);
-	matrixMultiplicationGraph.addEdge(taskTraversalA, stateManagerInputBlock);
-	matrixMultiplicationGraph.addEdge(taskTraversalB, stateManagerInputBlock);
+
+	matrixMultiplicationGraph.addEdge(taskTraversalA, taskCommInitA);
+	matrixMultiplicationGraph.addEdge(taskTraversalB, taskCommInitB);
+
+	matrixMultiplicationGraph.addEdge(taskCommInitA, stateManagerInputBlock);
+	matrixMultiplicationGraph.addEdge(taskCommInitB, stateManagerInputBlock);
+	matrixMultiplicationGraph.addEdge(taskCommInitA, taskCommFinalizeA);
+	matrixMultiplicationGraph.addEdge(taskCommInitB, taskCommFinalizeB);
+
 	matrixMultiplicationGraph.addEdge(taskTraversalC, stateManagerPartialComputation);
+
 	matrixMultiplicationGraph.addEdge(stateManagerInputBlock, productTask);
 	matrixMultiplicationGraph.addEdge(productTask, stateManagerPartialComputation);
+	matrixMultiplicationGraph.addEdge(productTask, taskCommFinalizeA);
+	matrixMultiplicationGraph.addEdge(productTask, taskCommFinalizeB);
+
+	matrixMultiplicationGraph.addEdge(taskCommFinalizeA, stateManagerCannonA);
+	matrixMultiplicationGraph.addEdge(taskCommFinalizeB, stateManagerCannonB);
+	matrixMultiplicationGraph.addEdge(stateManagerCannonA, taskCommInitA);
+	matrixMultiplicationGraph.addEdge(stateManagerCannonB, taskCommInitB);
+
+
 	matrixMultiplicationGraph.addEdge(stateManagerPartialComputation, additionTask);
 	matrixMultiplicationGraph.addEdge(additionTask, stateManagerPartialComputation);
 	matrixMultiplicationGraph.addEdge(additionTask, stateManagerOutputBlock);
+
 	matrixMultiplicationGraph.output(stateManagerOutputBlock);
 
 	// Execute the graph
@@ -335,7 +386,7 @@ int main(int argc, char **argv) {
   m = n; //assuming square matrix. hence the same dimension.
   p = n;
   if (blockSize == 0)
-     blockSize = n;  //assuming a single block per rank
+     blockSize = n;  //setting a single block per rank, if blockSize is 0
 
   if(n%blockSize != 0){
 	  if(rank == 0) std::cout << "n (number of rows per rank (N/sqrt(#ranks)) should be divisible by blockSize(b)";
