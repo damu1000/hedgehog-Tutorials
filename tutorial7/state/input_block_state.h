@@ -66,6 +66,7 @@ class InputBlockState : public hh::AbstractState<
         ttlA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()]
         = ttlA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()] - 1;
         if(ttlA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()] == 0) {
+          ttlA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()] = gridWidthRight_; //reset for the next Cannon's iteration
           gridMatrixA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()] = nullptr;
         }
         auto res = std::make_shared<std::pair<std::shared_ptr<MatrixBlockData<Type, 'a', Ord>>,
@@ -84,6 +85,7 @@ class InputBlockState : public hh::AbstractState<
         ttlB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()]
         = ttlB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()] - 1;
         if(ttlB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()] == 0) {
+          ttlB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()] = gridHeightLeft_; //reset for the next Cannon's iteration
           gridMatrixB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()] = nullptr;
         }
         auto res = std::make_shared<std::pair<std::shared_ptr<MatrixBlockData<Type, 'a', Ord>>,
@@ -100,7 +102,10 @@ class InputBlockState : public hh::AbstractState<
     std::shared_ptr<MatrixBlockData<Type, 'a', Ord>> res = nullptr;
     if((res = gridMatrixA_[i * gridSharedDimension_ + j])){
       ttlA_[i * gridSharedDimension_ + j] = ttlA_[i * gridSharedDimension_ + j] -1;
-      if(ttlA_[i * gridSharedDimension_ + j] == 0){ gridMatrixA_[i * gridSharedDimension_ + j] = nullptr; }
+      if(ttlA_[i * gridSharedDimension_ + j] == 0){
+    	  ttlA_[i * gridSharedDimension_ + j] = gridWidthRight_; //reset for the next Cannon's iteration
+    	  gridMatrixA_[i * gridSharedDimension_ + j] = nullptr;
+      }
     }
     return res;
   }
@@ -109,16 +114,21 @@ class InputBlockState : public hh::AbstractState<
     std::shared_ptr<MatrixBlockData<Type, 'b', Ord>> res = nullptr;
     if((res = gridMatrixB_[i * gridWidthRight_ + j])){
       ttlB_[i * gridWidthRight_ + j] = ttlB_[i * gridWidthRight_ + j] - 1;
-      if(ttlB_[i * gridWidthRight_ + j] == 0){ gridMatrixB_[i * gridWidthRight_ + j] = nullptr; }
+      if(ttlB_[i * gridWidthRight_ + j] == 0){
+    	  ttlB_[i * gridWidthRight_ + j] = gridHeightLeft_; //reset for the next Cannon's iteration
+    	  gridMatrixB_[i * gridWidthRight_ + j] = nullptr;
+      }
     }
     return res;
   }
 
   void matrixA(std::shared_ptr<MatrixBlockData<Type, 'a', Ord>> blockA){
+	assert(gridMatrixA_[blockA->rowIdx() * gridSharedDimension_ + blockA->colIdx()] == nullptr);
     gridMatrixA_[blockA->rowIdx() * gridSharedDimension_ + blockA->colIdx()] = blockA;
   }
 
   void matrixB(std::shared_ptr<MatrixBlockData<Type, 'b', Ord>> blockB){
+	assert(gridMatrixB_[blockB->rowIdx() * gridWidthRight_ + blockB->colIdx()] == nullptr);
     gridMatrixB_[blockB->rowIdx() * gridWidthRight_ + blockB->colIdx()] = blockB;
   }
 

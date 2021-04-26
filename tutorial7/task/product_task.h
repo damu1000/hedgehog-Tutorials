@@ -44,7 +44,7 @@ class ProductTask : public hh::AbstractTask<
           std::shared_ptr<MatrixBlockData<Type, 'a', Ord>>,
           std::shared_ptr<MatrixBlockData<Type, 'b', Ord>>
       >> ptr) override {
-	  printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
+
     auto matA = ptr->first;
     auto matB = ptr->second;
     auto matP = new Type[matA->blockSizeHeight() * matB->blockSizeWidth()]();
@@ -76,7 +76,6 @@ class ProductTask : public hh::AbstractTask<
       MatrixBlockData<Type, 'p', Ord>,
       std::pair<std::shared_ptr<MatrixBlockData<Type, 'a', Ord>>, std::shared_ptr<MatrixBlockData<Type, 'b', Ord>>>>
       > copy() override {
-	  printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
     return std::make_shared<ProductTask<Type, Ord>>(this->numberThreads(), countPartialComputation_);
   }
 };

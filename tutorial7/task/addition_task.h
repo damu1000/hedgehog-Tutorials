@@ -44,7 +44,6 @@ class AdditionTask : public hh::AbstractTask<
  public:
   void execute(std::shared_ptr<std::pair<std::shared_ptr<MatrixBlockData<Type, 'c', Ord>>,
                                          std::shared_ptr<MatrixBlockData<Type, 'p', Ord>>>> ptr) override {
-	  printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
     auto c = ptr->first;
     auto p = ptr->second;
     assert(c->blockSizeWidth() == p->blockSizeWidth());
@@ -71,7 +70,6 @@ class AdditionTask : public hh::AbstractTask<
   std::shared_ptr<hh::AbstractTask<MatrixBlockData<Type, 'c', Ord>,
                                    std::pair<std::shared_ptr<MatrixBlockData<Type, 'c', Ord>>,
                                          std::shared_ptr<MatrixBlockData<Type, 'p', Ord>>>>> copy() override {
-	  printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
     return std::make_shared<AdditionTask>(this->numberThreads());
   }
 };

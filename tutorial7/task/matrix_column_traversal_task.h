@@ -34,7 +34,7 @@ class MatrixColumnTraversalTask : public hh::AbstractTask<MatrixBlockData<Type, 
     for (size_t jGrid = 0; jGrid < ptr->numBlocksCols(); ++jGrid) {
       for (size_t iGrid = 0; iGrid < ptr->numBlocksRows(); ++iGrid) {
         if constexpr (Ord == Order::Row) {
-        this->addResult(
+        	auto matBlock =
             std::make_shared<MatrixBlockData<Type, Id, Ord>>(
                 iGrid, jGrid,
                 std::min(ptr->blockSize(), ptr->matrixHeight() - (iGrid * ptr->blockSize())),
@@ -42,10 +42,12 @@ class MatrixColumnTraversalTask : public hh::AbstractTask<MatrixBlockData<Type, 
                 ptr->leadingDimension(),
                 ptr->matrixData(),
                 ptr->matrixData() + (iGrid * ptr->blockSize()) * ptr->leadingDimension() + jGrid * ptr->blockSize()
-            )
-        );
+            );
+        	if(Id=='a' || Id=='b')
+        		matBlock->setupCommPackage();
+            this->addResult(matBlock);
         } else {
-          this->addResult(
+        	auto matBlock =
               std::make_shared<MatrixBlockData<Type, Id, Ord>>(
                   iGrid, jGrid,
                   std::min(ptr->blockSize(), ptr->matrixHeight() - (iGrid * ptr->blockSize())),
@@ -53,8 +55,10 @@ class MatrixColumnTraversalTask : public hh::AbstractTask<MatrixBlockData<Type, 
                   ptr->leadingDimension(),
                   ptr->matrixData(),
                   ptr->matrixData() + (jGrid * ptr->blockSize()) * ptr->leadingDimension() + iGrid * ptr->blockSize()
-              )
-          );
+              );
+        	if(Id=='a' || Id=='b')
+        		matBlock->setupCommPackage();
+            this->addResult(matBlock);
         }
       }
     }

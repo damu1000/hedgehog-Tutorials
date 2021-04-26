@@ -55,8 +55,8 @@ public:
 		tag = _rowIdx * (leadingDimension / n) + _colIdx; //this is basically the position of the block in the local patch. This will give unique tags to each block. leadingDimension / n gives num of blocks along x dimension
 		tag = 2*tag + Id == 'a' ? 0 : 1;
 		int size;
-		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-		MPI_Comm_size(MPI_COMM_WORLD, &size);
+		MPI_Comm_rank(comm, &rank);
+		MPI_Comm_size(comm, &size);
 		q = (int)sqrt(size);
 
 		//allocate buffers
@@ -99,8 +99,9 @@ public:
 //		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 //		std::cout << rank << " Id: " << Id << " source: " << s <<  " des: " <<d << " tag: " << tag << "\n";
 
-		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_BYTE, d, tag, comm, &reqs[0]);
-		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_BYTE, s, tag, comm, &reqs[1]);
+		//added 10k to tag. Otherwise conflicts with subsequent init comm. Do not know how, but it does.
+		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_BYTE, d, 10000+tag, comm, &reqs[0]);
+		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_BYTE, s, 10000+tag, comm, &reqs[1]);
 		MPI_Waitall(2, reqs, stats);	//wait till data is sent and received
 //		printf("%d Aligned for block %c - %d size: %d x %d\n", rank, Id, tag, n, n);
 

@@ -56,7 +56,6 @@ class MatrixBlockData {
     if (blockSizeHeight_ == 0 || blockSizeWidth_ == 0) {
       std::cout << "Can't compute an empty matrix block" << std::endl;
     }
-    comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_);
   }
 
   MatrixBlockData(size_t rowIdx,
@@ -78,7 +77,6 @@ class MatrixBlockData {
     } else {
       this->leadingDimension(this->blockSizeHeight());
     }
-    comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_);
   }
 
   MatrixBlockData(size_t rowIdx,
@@ -102,7 +100,6 @@ class MatrixBlockData {
       blockData_ =
           matrix.matrixData() + (colIdx * matrix.blockSize()) * matrix.leadingDimension() + rowIdx * matrix.blockSize();
     }
-    comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_);
   }
 
   template<char OldId>
@@ -114,7 +111,6 @@ class MatrixBlockData {
     this->leadingDimension_ = o.leadingDimension_;
     this->fullMatrixData_ = o.fullMatrixData_;
     this->blockData_ = o.blockData_;
-    comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_);
   }
 
   template<char OldId>
@@ -126,7 +122,6 @@ class MatrixBlockData {
     this->leadingDimension_ = o->getLeadingDimension();
     this->fullMatrixData_ = o->getFullMatrixData();
     this->blockData_ = o->getBlockData();
-    comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_);
   }
 
   [[nodiscard]] size_t rowIdx() const { return rowIdx_; }
@@ -145,9 +140,11 @@ class MatrixBlockData {
   void fullMatrixData(Type *fullMatrixData) { fullMatrixData_ = fullMatrixData; }
   void blockData(Type *blockData) { blockData_ = blockData; }
 
-  //comm methods
+  //comm methods for this block
   void initializeComm() {comm.initializeComm();}
   void finalizeComm() {comm.finalizeComm();}
+  void destroyComm() {comm.destroyComm();}
+  void setupCommPackage() {comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_);}
 
   friend std::ostream &operator<<(std::ostream &os, MatrixBlockData const &data) {
     os << "MatrixBlockData " << Id << " position Grid: (" << data.rowIdx_ << ", " << data.colIdx_ << ")" << std::endl;
