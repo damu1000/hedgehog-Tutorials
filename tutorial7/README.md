@@ -16,12 +16,14 @@ For simplicity num of ranks must be a perfect square, and matrix size should be 
 - Counts of blocks and "q" passed to tasks are tricky to figure out. Add comments in the code before the logic evaporates from the mind.
 - Test with FP numbers.
 - Verify multiple threads for product and addition task.
+- Currently assuming the square matrices, and square blocks. So using nblocks in many places. Fix it to correct mblocks / pblocks. 
 - See if moving finalize comm task after product task works fine. If yes, comm and addition can be overlapped.
 - See if the two for loops in the finalize comm task can be merged. Will give better streaming.
 - See if MPI_Testall can be called for the previous blocks for every new block pushed into the finalize comm task. Will help comm progress.
 - Test performance, figure out ideal thread configuration.
 - Find out a way to call destroyComm. Currently it is not destroyed causing a memory leak.
 - Add changes between Tutorial 3 and 7.
+- Currently assuming the square matrices, and square blocks. Fix for uneven, non square sizes.
 
 Caution: Getting rid of race conditions / hangs / deadlocks coupled with comm is very tricky. Take baby steps.
 
