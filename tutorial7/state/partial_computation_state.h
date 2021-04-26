@@ -44,8 +44,11 @@ class PartialComputationState
       ttl_ = 0;
 
  public:
-  PartialComputationState(size_t gridHeightResults, size_t gridWidthResults, size_t ttl)
-      : gridHeightResults_(gridHeightResults), gridWidthResults_(gridWidthResults), ttl_(ttl) {
+  //Note gridHeightResults_,  gridWidthResults_, and ttl_ multiplied by q in during initialization.
+  //that's the total number of multiplications needed at the end of cannon's algorithm
+  //Need to multiply by q here because state should not be done before finishing all the iterations
+  PartialComputationState(size_t gridHeightResults, size_t gridWidthResults, size_t ttl, int q)
+      : gridHeightResults_(gridHeightResults * q), gridWidthResults_(gridWidthResults * q), ttl_(ttl * q) {
     gridPartialProduct_ =
         std::vector<std::vector<std::shared_ptr<MatrixBlockData<Type, 'p', Ord>>>>(
             gridHeightResults_ * gridWidthResults_);

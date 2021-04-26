@@ -45,7 +45,7 @@ public:
 	CommPackage() = default;
 
 	//this must be called before calling init and finalize comm
-	void setupCommPackage(MatrixType *_data, int _n, int _leadingDimension, int _rowIdx, int _colIdx) //n and _n is blocksize.
+	void setupCommPackage(MatrixType *_data, int _n, int _leadingDimension, int _rowIdx, int _colIdx, int alignMat=0) //n and _n is blocksize.
 	{
 		if(Id != 'a' && Id != 'b') return; // no need to init for ids other than a and b
 
@@ -63,13 +63,16 @@ public:
 		sendbuff=new MatrixType[n*n];
 		recvbuff=new MatrixType[n*n];
 
-		if(Id=='a'){
+		if(Id=='a')
 			MPI_Cart_shift(comm, ALONG_ROWS, -1, &src, &dest);	//get source and destination for A and B. displacement for both is -1 i.e. either to left or up and by 1 element in grid.
-			align(ALONG_ROWS, - (rank/q));	//do the initial alignment of tiles
-		}
-		else if(Id=='b'){
+		else if(Id=='b')
 			MPI_Cart_shift(comm, ALONG_COLS, -1, &src, &dest);
-			align(ALONG_COLS, - (rank%q));
+
+		if(alignMat==1){
+			if(Id=='a')
+				align(ALONG_ROWS, - (rank/q));	//do the initial alignment of tiles
+			else if(Id=='b')
+				align(ALONG_COLS, - (rank%q));
 		}
 
 		for(int i = 0; i<n; i++) //copy values into send buffer for the first send
@@ -155,16 +158,17 @@ public:
 		recvbuff = temp;
 	}
 
-	void destroyComm()
+	void destroyComm(int alignMat=0)
 	{
 		if(Id != 'a' && Id != 'b') return; // no need to destroy for ids other than a and b
 
 		//After the last iteration, align A and B back to old positions - same displacement with opposite direction
-		if(Id=='a')
-			align(ALONG_ROWS, (rank/q));
-		else if (Id=='b')
-			align(ALONG_COLS, (rank%q));
-		
+		if(alignMat==1){
+			if(Id=='a')
+				align(ALONG_ROWS, (rank/q));
+			else if (Id=='b')
+				align(ALONG_COLS, (rank%q));
+		}
 		delete []sendbuff;
 		delete []recvbuff;
 	}

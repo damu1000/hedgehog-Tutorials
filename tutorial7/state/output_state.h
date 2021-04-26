@@ -35,8 +35,10 @@ class OutputState : public hh::AbstractState<MatrixBlockData<Type, 'c', Ord>, Ma
       gridWidthTTL_ = 0;
 
  public:
-  OutputState(size_t gridHeightTtl, size_t gridWidthTtl, size_t const &ttl)
-      : ttl_(std::vector<size_t>(gridHeightTtl * gridWidthTtl, ttl)), 
+  //Note ttl_ is initialized with ttl * q. That's the total number of output blocks needed over the all iterations of Cannon's algo.
+  //State will exit prematurely if not multiplied by q.
+  OutputState(size_t gridHeightTtl, size_t gridWidthTtl, size_t const &ttl, int q)
+      : ttl_(std::vector<size_t>(gridHeightTtl * gridWidthTtl, ttl * q)),
       gridHeightTTL_(gridHeightTtl), gridWidthTTL_(gridWidthTtl) {}
 
   virtual ~OutputState() = default;

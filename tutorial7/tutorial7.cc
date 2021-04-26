@@ -68,8 +68,8 @@ MatrixType * initMatrix(size_t n) // n should be rows*cols
 
 	for (size_t i = 0; i < n; ++i){
 		//data[i] = unif(rng);
-		//data[i] = rank*n + i;
-		data[i] = rank + 1;
+		data[i] = rank*n + i;
+//		data[i] = rank + 1;
 		//data[i] = 1;
 	}
 
@@ -108,8 +108,8 @@ void matMult(double *A, double *B, double *C, int n, int q) //Cannon's Algorithm
 {
 	CommPackage<double, 'a'> cpackA; //create and init comm packages for matrices A and B.
 	CommPackage<double, 'b'> cpackB;
-	cpackA.setupCommPackage(A, n, n, 0, 0); //patch is not divided into blocks. So the blockSize = leading dimension = n and rowId=colId =0
-	cpackB.setupCommPackage(B, n, n, 0, 0);
+	cpackA.setupCommPackage(A, n, n, 0, 0, 1); //patch is not divided into blocks. So the blockSize = leading dimension = n and rowId=colId =0
+	cpackB.setupCommPackage(B, n, n, 0, 0, 1);
 
 	for(int k=0; k<q; k++)	//main loop of Cannon's Algorithm. running it from 0 to q rather than 1 to q, otherwise we miss multiplication of 1 block.
 	{
@@ -153,8 +153,8 @@ template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockDat
 class commFinalizeTask : public hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>> {
 public:
 	//call finalizeComm only when ttl (time to live) reaches 0.
-	//ttl for mat A is num of blocks along x dim in mat B (because each block in A will be needed those many times)
-	//similary ttl for mat B is num of blocks along y dim in mat A
+	//ttl should be nBlocks*mBlocks*pBlocks i.e., num of blocks calculated locally. Restore ttl after each Cannon's iteration.
+	//Do not multiply by q, because counter needs to reach 0 for every iteration to call finalizeComm routine. If multiplied by q, ttl will never reach 0.
 	int ttl, ttlCopy, rows, cols;
 	std::vector<std::shared_ptr<MBD>> matBlock;
 	commFinalizeTask(int _rows, int _cols, int _ttl) : hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>>("commFinalize") {
@@ -194,7 +194,9 @@ class CannonState : public hh::AbstractState<MBD, MBD> {
 	int ttl;
 	std::shared_ptr<MBD> matBlock{NULL};
 public:
-	CannonState(int ttl_) : ttl(ttl_) {}
+	//ttl_ should be num of blocks locally. Note ttl is set to ttl_ * (q-1) to cover iterations of cannon's algo.
+	//q-1 because no need to loop back after the last iteration.
+	CannonState(int ttl_, int q) : ttl(ttl_ * (q-1)) {}
 	bool isDone() {
 //		if(ttl==0)
 //			matBlock->destroyComm();
@@ -229,6 +231,16 @@ public:
 void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, size_t numberThreadAddition, MatrixType *dataA, MatrixType *dataB, MatrixType * dataC){
 
 	size_t m = n, p = n;
+
+	//Exchange initial patches as per cannon's algo. setupCommPackage with align=1 for entire patch will do it. Destroy comm later. Now each block uses its own comm.
+	//Doing it per block causes race condition because blocks with alignment completed jump to next product task.
+	CommPackage<MatrixType, 'a'> commA;
+	CommPackage<MatrixType, 'b'> commB;
+	commA.setupCommPackage(dataA, n, n, 0, 0, 1);
+	commB.setupCommPackage(dataB, n, n, 0, 0, 1);
+	commA.destroyComm();
+	commB.destroyComm();
+
 	// Wrap them to convenient object representing the matrices
 	auto matrixA = std::make_shared<MatrixData<MatrixType, 'a', Ord>>(n, m, blockSize, dataA);
 	auto matrixB = std::make_shared<MatrixData<MatrixType, 'b', Ord>>(m, p, blockSize, dataB);
@@ -244,6 +256,7 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 			MatrixData<MatrixType, 'b', Ord>,
 			MatrixData<MatrixType, 'c', Ord>> ("Matrix Multiplication Graph");
 
+	//counts of n, m, p, nblocks, mblocks, pblocks and q are tricky. Check each task / state for the explanation.
 	// Tasks
 	auto taskTraversalA = std::make_shared<MatrixRowTraversalTask<MatrixType, 'a', Ord>>();
 	auto taskTraversalB = std::make_shared<MatrixColumnTraversalTask<MatrixType, 'b', Ord>>();
@@ -252,19 +265,19 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto taskCommInitA = std::make_shared<commInitTask<MatrixType, 'a', Ord>>();
 	auto taskCommInitB = std::make_shared<commInitTask<MatrixType, 'b', Ord>>();
 
-	auto productTask = std::make_shared<ProductTask<MatrixType, Ord>>(numberThreadProduct, p * q);
+	auto productTask = std::make_shared<ProductTask<MatrixType, Ord>>(numberThreadProduct, p);
 
-	auto taskCommFinalizeA = std::make_shared<commFinalizeTask<MatrixType, 'a', Ord>>(nBlocks, mBlocks, nBlocks * mBlocks * pBlocks); //ToDO: change nBlocks to correct m / p blocks
-	auto taskCommFinalizeB = std::make_shared<commFinalizeTask<MatrixType, 'b', Ord>>(mBlocks, pBlocks, nBlocks * mBlocks * pBlocks); //ToDO: change nBlocks to correct m / p blocks
+	auto taskCommFinalizeA = std::make_shared<commFinalizeTask<MatrixType, 'a', Ord>>(nBlocks, mBlocks, nBlocks * mBlocks * pBlocks);
+	auto taskCommFinalizeB = std::make_shared<commFinalizeTask<MatrixType, 'b', Ord>>(mBlocks, pBlocks, nBlocks * mBlocks * pBlocks);
 
 	auto additionTask = std::make_shared<AdditionTask<MatrixType, Ord>>(numberThreadAddition);
 
 	// State
 	auto stateInputBlock = std::make_shared<InputBlockState<MatrixType, Ord>>(nBlocks, mBlocks, pBlocks);
-	auto statePartialComputation = std::make_shared<PartialComputationState<MatrixType, Ord>>(nBlocks * q, pBlocks * q, nBlocks * mBlocks * pBlocks * q);
-	auto stateOutput = std::make_shared<OutputState<MatrixType, Ord>>(nBlocks, pBlocks, mBlocks*q);
-	auto stateCannonA = std::make_shared<CannonState<MatrixType, 'a', Ord>>(nBlocks*nBlocks*(q-1)); //output state to carry out loops of Cannon's algorithm
-	auto stateCannonB = std::make_shared<CannonState<MatrixType, 'b', Ord>>(nBlocks*nBlocks*(q-1));
+	auto statePartialComputation = std::make_shared<PartialComputationState<MatrixType, Ord>>(nBlocks, pBlocks, nBlocks * mBlocks * pBlocks, q);
+	auto stateOutput = std::make_shared<OutputState<MatrixType, Ord>>(nBlocks, pBlocks, mBlocks, q);
+	auto stateCannonA = std::make_shared<CannonState<MatrixType, 'a', Ord>>(nBlocks*mBlocks, q); //output state to carry out loops of Cannon's algorithm
+	auto stateCannonB = std::make_shared<CannonState<MatrixType, 'b', Ord>>(mBlocks*pBlocks, q);
 
 	// StateManager
 	typedef std::pair<std::shared_ptr<MatrixBlockData<MatrixType, 'a', Ord>>,
@@ -289,12 +302,12 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.input(taskTraversalB);
 	matrixMultiplicationGraph.input(taskTraversalC);
 
-	matrixMultiplicationGraph.addEdge(taskTraversalA, taskCommInitA);
+	matrixMultiplicationGraph.addEdge(taskTraversalA, taskCommInitA);          //1. pass A / B to init. init will call MPI send-recv for these blocks
 	matrixMultiplicationGraph.addEdge(taskTraversalB, taskCommInitB);
 
-	matrixMultiplicationGraph.addEdge(taskCommInitA, stateManagerInputBlock);
+	matrixMultiplicationGraph.addEdge(taskCommInitA, stateManagerInputBlock);  //2. pass on the updated blocks to Input State for compute
 	matrixMultiplicationGraph.addEdge(taskCommInitB, stateManagerInputBlock);
-	matrixMultiplicationGraph.addEdge(taskCommInitA, taskCommFinalizeA);
+	matrixMultiplicationGraph.addEdge(taskCommInitA, taskCommFinalizeA);       //3. Pass on A/B blocks to finalize comm. Will be updated after finalize
 	matrixMultiplicationGraph.addEdge(taskCommInitB, taskCommFinalizeB);
 
 	matrixMultiplicationGraph.addEdge(taskTraversalC, stateManagerPartialComputation);
@@ -307,12 +320,12 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.addEdge(additionTask, stateManagerPartialComputation);
 	matrixMultiplicationGraph.addEdge(additionTask, stateManagerOutputBlock);
 
-	matrixMultiplicationGraph.addEdge(additionTask, taskCommFinalizeA);
+	matrixMultiplicationGraph.addEdge(additionTask, taskCommFinalizeA);        //4. Pass on matmult result to finalize. Actual finalization happens only when ALL blocks are computed. Avoids premature update of A/B.
 	matrixMultiplicationGraph.addEdge(additionTask, taskCommFinalizeB);
 
-	matrixMultiplicationGraph.addEdge(taskCommFinalizeA, stateManagerCannonA);
+	matrixMultiplicationGraph.addEdge(taskCommFinalizeA, stateManagerCannonA); //5. Cannon state checks if q iterations are over.
 	matrixMultiplicationGraph.addEdge(taskCommFinalizeB, stateManagerCannonB);
-	matrixMultiplicationGraph.addEdge(stateManagerCannonA, taskCommInitA);
+	matrixMultiplicationGraph.addEdge(stateManagerCannonA, taskCommInitA);     //6. Push updated A/B blocks to init (step 1.)
 	matrixMultiplicationGraph.addEdge(stateManagerCannonB, taskCommInitB);
 
 
