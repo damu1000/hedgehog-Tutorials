@@ -16,20 +16,23 @@
 // damage to property. The software developed by NIST employees is not subject to copyright protection within the
 // United States.
 
-#include "comm.h"
 #include <unistd.h>
 #include <hedgehog/hedgehog.h>
 #include <random>
 #include "../utils/tclap/CmdLine.h"
+#include "comm/comm.h"
 
 #include "data/matrix_data.h"
 #include "data/matrix_block_data.h"
 
+#include "task/comm_tasks.h"
 #include "task/addition_task.h"
 #include "task/product_task.h"
 #include "task/matrix_row_traversal_task.h"
 #include "task/matrix_column_traversal_task.h"
 
+#include "state/cannon_state.h"
+#include "state/cannon_state_manager.h"
 #include "state/input_block_state.h"
 #include "state/output_state.h"
 #include "state/partial_computation_state.h"
@@ -53,6 +56,9 @@ class SizeConstraint : public TCLAP::Constraint<size_t> {
   }
 };
 
+
+//------------------------------------------- initialize the matrix -----------------------------------------------
+
 MatrixType * initMatrix(size_t n) // n should be rows*cols
 {
 	// Mersenne Twister Random Generator
@@ -75,6 +81,9 @@ MatrixType * initMatrix(size_t n) // n should be rows*cols
 
 	return data;
 }
+
+
+//------------------------------------------- verify with hh and without hh -----------------------------------------------
 
 #define RED   "\x1B[31m"
 #define RESET "\x1B[0m"
@@ -104,7 +113,10 @@ void inline verifyProduct(double* correct, double *hh, int n, int rank)
 }
 
 
-void matMult(double *A, double *B, double *C, int n, int q) //Cannon's Algorithm. without HH
+
+//----------------------------- Cannon's Algorithm. without HH. Used for verification -----------------------------
+
+void matMult(double *A, double *B, double *C, int n, int q)
 {
 	CommPackage<double, 'a'> cpackA; //create and init comm packages for matrices A and B.
 	CommPackage<double, 'b'> cpackB;
@@ -130,103 +142,10 @@ void matMult(double *A, double *B, double *C, int n, int q) //Cannon's Algorithm
 	cpackB.destroyComm();
 }
 
-//input from traversal task and pass it on to finalize and also product
-template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
-class commInitTask : public hh::AbstractTask<MBD, MBD> {
-public:
-	commInitTask() : hh::AbstractTask<MBD, MBD>("commInit") {}
-
-	void execute(std::shared_ptr<MBD> matBlock) override {
-		//printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
-		matBlock->initializeComm();
-		this->addResult(matBlock); //push result
-	}
-
-	std::shared_ptr<hh::AbstractTask<MBD, MBD>> copy() override {
-		return std::make_shared<commInitTask<Type, Id, Ord>>();
-	}
-};
-
-//needs A / B from init task. Just save A / B passed on by init.
-//Second input is partial matrix p from product Task. Decrement ttl for every input from productTask. Finalize comm when ttl reaches 0
-template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
-class commFinalizeTask : public hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>> {
-public:
-	//call finalizeComm only when ttl (time to live) reaches 0.
-	//ttl should be nBlocks*mBlocks*pBlocks i.e., num of blocks calculated locally. Restore ttl after each Cannon's iteration.
-	//Do not multiply by q, because counter needs to reach 0 for every iteration to call finalizeComm routine. If multiplied by q, ttl will never reach 0.
-	int ttl, ttlCopy, rows, cols;
-	std::vector<std::shared_ptr<MBD>> matBlock;
-	commFinalizeTask(int _rows, int _cols, int _ttl) : hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>>("commFinalize") {
-		ttl = _ttl;
-		ttlCopy = ttl;
-		rows = _rows;
-		cols = _cols;
-		matBlock = std::vector<std::shared_ptr<MBD>> (rows*cols, nullptr);
-	}
-
-	void execute(std::shared_ptr<MBD> _matBlock) override {
-		matBlock[_matBlock->rowIdx() * cols + _matBlock->colIdx()] = _matBlock;
-	}
-
-	void execute(std::shared_ptr<MatrixBlockData<Type, 'c', Ord>> partialResult) override {//partialResult is unused here, but it ensures product is completed
-		ttl--;
-		if(ttl==0){
-			ttl = ttlCopy; //restore for the next Cannon's iteration
-			for(auto &m : matBlock){
-				if(m){
-					m->finalizeComm();
-				}
-			}
-			for(auto &m : matBlock){
-				this->addResult(m); //push result
-			}
-		}
-	}
-
-	std::shared_ptr<hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>>> copy() override {
-		return std::make_shared<commFinalizeTask>(this->rows, this->cols, this->ttl);
-	}
-};
-
-template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
-class CannonState : public hh::AbstractState<MBD, MBD> {
-	int ttl;
-	std::shared_ptr<MBD> matBlock{NULL};
-public:
-	//ttl_ should be num of blocks locally. Note ttl is set to ttl_ * (q-1) to cover iterations of cannon's algo.
-	//q-1 because no need to loop back after the last iteration.
-	CannonState(int ttl_, int q) : ttl(ttl_ * (q-1)) {}
-	bool isDone() {
-//		if(ttl==0)
-//			matBlock->destroyComm();
-		return ttl == 0;
-	};
-
-	void execute(std::shared_ptr<MBD> inputparams) override {
-		matBlock = inputparams;
-		ttl--;
-		this->push(inputparams); //push result
-	}
-};
-
-template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
-class CannonStateManager : public hh::StateManager<MBD, MBD> {
-public:
-	explicit CannonStateManager(std::shared_ptr<CannonState<Type, Id, Ord>> const &state) :
-	hh::StateManager<MBD, MBD>("CannonStateManager", state, false) {}
-
-	bool canTerminate() override {
-		this->state()->lock();
-		auto ret = std::dynamic_pointer_cast<CannonState<Type, Id, Ord>>(this->state())->isDone();
-		this->state()->unlock();
-		return ret;
-	}
-};
 
 
 
-
+//----------------------------------------- Cannon's Algorithm. with HH. -----------------------------------------
 
 void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, size_t numberThreadAddition, MatrixType *dataA, MatrixType *dataB, MatrixType * dataC){
 
@@ -345,12 +264,14 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// Wait for the graph to terminate
 	matrixMultiplicationGraph.waitForTermination();
 
+	//export graph if needed
 //	int rank;
 //	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 //	std::string filename = "/home/damodars/hedgehog/tutorials/tutorial7/graph_"  + std::to_string(rank) + ".dot";
 //	matrixMultiplicationGraph.createDotFile(filename);
 
 }
+
 
 int main(int argc, char **argv) {
 

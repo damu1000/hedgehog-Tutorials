@@ -1,5 +1,5 @@
-#ifndef COMM_H
-#define COMM_H
+#ifndef TUTORIAL7_COMM_H
+#define TUTORIAL7_COMM_H
 
 #include<iostream>
 #include <math.h>

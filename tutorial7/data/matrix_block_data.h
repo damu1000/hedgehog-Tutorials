@@ -24,7 +24,7 @@
 #include <memory>
 
 #include "matrix_data.h"
-#include "../comm.h"
+#include "../comm/comm.h"
 
 template<class Type, char Id, Order Ord>
 class MatrixBlockData {
