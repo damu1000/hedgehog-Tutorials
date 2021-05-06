@@ -466,7 +466,7 @@ int main(int argc, char **argv) {
 
 	  if(rank==0)
 		  printf(" Setup time: %f\n Comm time: %f seconds\n Comp time: %f seconds\n Total time: %f seconds\n",
-				  averageTime[0]/size/iterations, averageTime[1]/size/iterations, (averageTime[2]-averageTime[0]-averageTime[1])/size/iterations, averageTime[2]/size/iterations  );
+				  averageTime[0]/(double)size/iterations, averageTime[1]/(double)size/iterations, (averageTime[2]-averageTime[0]-averageTime[1])/(double)size/iterations, averageTime[2]/(double)size/iterations  );
   }
 
 
