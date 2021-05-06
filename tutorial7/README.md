@@ -12,11 +12,11 @@ Run: mpirun -np 4 ./matmult -n 8 -b 2 -v 1
 
 For simplicity num of ranks must be a perfect square, and matrix size should be divisible by sqrt(num of ranks). Matrix is assumed to be a square matrix. e.g., running the above mpirun configuration will spawn 4 ranks with the matrix size of 8x8. Each rank will get a patch of 4x4. Each rank then will divide the its patch into the tsmaller blocks of 2x2 i.e., 4 blocks per rank and the multiplication is carried out as a "streaming" of blocks. The option "-v 1" will verify the output. 
 
-![Domain decomposition of 8x8 matrix divided among 4 ranks having block size of 2x2](readme_images/domain_decomposition.pdf)
+![Domain decomposition of 8x8 matrix divided among 4 ranks having block size of 2x2](readme_images/domain_decomposition.png)
 
 The following graph shows the taskgraph for rank 0. Compare it with the taskgraph of tutorial 3. Additional tasks InitComm, FinalizeComm and CommState are created to handle  communication. Notice the loop after Comm state which carries out iterations of the Cannon's algorithm.
 
-![Task  graph for rank 0](readme_images/graph_4ranks_8x8matix_2x2blocks.pdf)
+![Task  graph for rank 0](readme_images/graph_4ranks_8x8matix_2x2blocks.png)
 
 ### To DO:
 - Counts of blocks and "q" passed to tasks are tricky to figure out. Add comments in the code before the logic evaporates from the mind - done
