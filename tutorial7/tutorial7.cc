@@ -25,7 +25,7 @@
 #include "data/matrix_data.h"
 #include "data/matrix_block_data.h"
 
-#include "task/comm_tasks.h"
+#include "comm/comm_tasks.h"
 #include "task/addition_task.h"
 #include "task/product_task.h"
 #include "task/matrix_row_traversal_task.h"
@@ -128,7 +128,6 @@ void matMult(double *A, double *B, double *C, int n, int q)
 		cpackA.initializeComm(); //init comm for this iteration
 		cpackB.initializeComm();
 
-#pragma omp parallel for
 		for(int i = 0; i<n; i++)
 			for(int j = 0; j<n; j++)
 				for(int l = 0; l<n; l++)

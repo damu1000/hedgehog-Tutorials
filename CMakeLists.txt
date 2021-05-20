@@ -27,7 +27,8 @@ endif (CUDA_FOUND)
 set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} ${Hedgehog_CXX_FLAGS})
 
 if (NOT MSVC)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wextra -Werror -pedantic")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wextra -pedantic")
+	#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wextra -Werror -pedantic")
 endif (NOT MSVC)
 
 #Gather tclap headers
@@ -42,6 +43,7 @@ endif (OpenBLAS_FOUND)
 if (CUDA_FOUND)
 	add_subdirectory(tutorial4)
 	add_subdirectory(tutorial5)
-
+	add_subdirectory(tutorial8)
+	
 	add_subdirectory(advanced/tutorial1)
 endif (CUDA_FOUND)

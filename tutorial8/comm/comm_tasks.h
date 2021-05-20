@@ -25,7 +25,7 @@
 
 
 //input from traversal task and pass it on to finalize and also product
-template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
+template<class Type, char Id, Order Ord = Order::Column, class MBD = MatrixBlockData<Type, Id, Ord>>
 class commInitTask : public hh::AbstractTask<MBD, MBD> {
 public:
 	commInitTask() : hh::AbstractTask<MBD, MBD>("commInit") {}
@@ -45,7 +45,7 @@ public:
 
 //needs A / B from init task. Just save A / B passed on by init.
 //Second input is partial matrix p from product Task. Decrement ttl for every input from productTask. Finalize comm when ttl reaches 0
-template<class Type, char Id, Order Ord = Order::Row, class MBD = MatrixBlockData<Type, Id, Ord>>
+template<class Type, char Id, Order Ord = Order::Column, class MBD = MatrixBlockData<Type, Id, Ord>>
 class commFinalizeTask : public hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>> {
 public:
 	//call finalizeComm only when ttl (time to live) reaches 0.

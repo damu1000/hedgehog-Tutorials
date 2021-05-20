@@ -295,7 +295,9 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// Wait for the graph to terminate
 	matrixMultiplicationGraph.waitForTermination();
 
-	matrixMultiplicationGraph.createDotFile(std::string("Tutorial4CUDAMatrixMultiplicationCycle.dot"), hh::ColorScheme::EXECUTION,
+	int rank;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	matrixMultiplicationGraph.createDotFile(std::string("graph_"  + std::to_string(rank) + ".dot"), hh::ColorScheme::EXECUTION,
 			hh::StructureOptions::NONE);
 
 }
