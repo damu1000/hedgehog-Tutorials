@@ -53,6 +53,9 @@ public:
 	//Do not multiply by q, because counter needs to reach 0 for every iteration to call finalizeComm routine. If multiplied by q, ttl will never reach 0.
 	int ttl, ttlCopy, rows, cols;
 	std::vector<std::shared_ptr<MBD>> matBlock;
+
+	//TODO: rethink about ttl logic. no need to wait for the entire c to be computed before finalizing comm for all blocks at once
+	//can it be done based on rolling basis? use indexes of matrix c to finalize comm of A and B with corresponding row and col ???
 	commFinalizeTask(int _rows, int _cols, int _ttl) : hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>>("commFinalize") {
 		ttl = _ttl;
 		ttlCopy = ttl;
@@ -72,11 +75,12 @@ public:
 			for(auto &m : matBlock){
 				if(m){
 					m->finalizeComm();
+					this->addResult(m); //push result
 				}
 			}
-			for(auto &m : matBlock){
-				this->addResult(m); //push result
-			}
+//			for(auto &m : matBlock){
+//				this->addResult(m); //push result
+//			}
 		}
 	}
 
