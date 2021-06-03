@@ -195,10 +195,10 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 
 	// Cuda tasks
 	// Tasks
-	auto copyInATask = std::make_shared<CudaCopyInGpu<MatrixType, 'a'>>(pBlocks, blockSize, n);
-	auto copyInBTask = std::make_shared<CudaCopyInGpu<MatrixType, 'b'>>(nBlocks, blockSize, m);
+	auto copyInATask = std::make_shared<CudaCopyInGpu<MatrixType, 'a'>>(pBlocks, blockSize, n, nBlocks * mBlocks);
+	auto copyInBTask = std::make_shared<CudaCopyInGpu<MatrixType, 'b'>>(nBlocks, blockSize, m, mBlocks * pBlocks);
 	auto productTask = std::make_shared<CudaProductTask<MatrixType>>(p, numberThreadProduct);
-	auto copyOutTask = std::make_shared<CudaCopyOutGpu<MatrixType>>(blockSize);
+	auto copyOutTask = std::make_shared<CudaCopyOutGpu<MatrixType>>(blockSize, nBlocks * mBlocks * pBlocks);
 
 	// MemoryManagers
 	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 4, blockSize);

@@ -30,15 +30,34 @@ class CudaCopyInGpu : public hh::AbstractCUDATask<CudaMatrixBlockData<MatrixType
   size_t
       blockTTL_ = 0,
       blockSize_ = 0,
-      matrixLeadingDimension_ = 0;
+      matrixLeadingDimension_ = 0,
+	  numCopies_ = 0, numResetCopies_ = 0;
+
+  std::atomic<int> id = 0;
+  std::vector<cudaEvent_t> copyEvent;
+  std::vector<std::shared_ptr<CudaMatrixBlockData<MatrixType, Id>>> blocksCopied;
 
  public:
-  CudaCopyInGpu(size_t blockTTL, size_t blockSize, size_t matrixLeadingDimension)
+  CudaCopyInGpu(size_t blockTTL, size_t blockSize, size_t matrixLeadingDimension, size_t numOfCopies)
       : hh::AbstractCUDATask<CudaMatrixBlockData<MatrixType, Id>, MatrixBlockData<MatrixType, Id, Order::Column>>
             ("Copy In GPU", 1, false, false),
         blockTTL_(blockTTL),
         blockSize_(blockSize),
-        matrixLeadingDimension_(matrixLeadingDimension) {}
+        matrixLeadingDimension_(matrixLeadingDimension),
+		numCopies_ (numOfCopies),
+		numResetCopies_ (numOfCopies) {
+
+	  copyEvent = std::vector<cudaEvent_t>(numCopies_);
+	  blocksCopied = std::vector<std::shared_ptr<CudaMatrixBlockData<MatrixType, Id>>>(numCopies_, nullptr);
+
+	  for(size_t i=0; i<numCopies_; i++)
+		  checkCudaErrors(cudaEventCreate(&copyEvent[i]));
+  }
+
+  ~CudaCopyInGpu(){
+	  for(size_t i=0; i<numCopies_; i++)
+	    checkCudaErrors(cudaEventDestroy(copyEvent[i]));
+  }
 
   void execute(std::shared_ptr<MatrixBlockData<MatrixType, Id, Order::Column>> ptr) override {
     std::shared_ptr<CudaMatrixBlockData<MatrixType, Id>> block = this->getManagedMemory();
@@ -49,6 +68,9 @@ class CudaCopyInGpu : public hh::AbstractCUDATask<CudaMatrixBlockData<MatrixType
     block->leadingDimension(block->blockSizeHeight());
     block->fullMatrixData(ptr->fullMatrixData());
     block->ttl(blockTTL_);
+
+    int myid = id++;
+    numCopies_ --;
 
     if (ptr->leadingDimension() == block->leadingDimension()) {
       checkCudaErrors(cudaMemcpyAsync(block->blockData(), ptr->blockData(),
@@ -62,14 +84,43 @@ class CudaCopyInGpu : public hh::AbstractCUDATask<CudaMatrixBlockData<MatrixType
           (int) matrixLeadingDimension_, block->blockData(), (int) block->leadingDimension(), this->stream());
     }
 
-    checkCudaErrors(cudaStreamSynchronize(this->stream()));
-    this->addResult(block);
+    checkCudaErrors(cudaEventRecord(copyEvent[myid], this->stream())); //record event and store the block
+    assert(blocksCopied[myid] == nullptr);
+    blocksCopied[myid] = block;
+
+    checkProgress(myid);
+
+    if(numCopies_ == 0){                 // if this is the last block,
+    	while(checkProgress(myid) > 0); // wait until all pending transfers are over
+    	numCopies_ = numResetCopies_;
+    	myid = 0;
+    	id = 0;
+    }
   }
 
   std::shared_ptr<hh::AbstractTask<CudaMatrixBlockData<MatrixType, Id>,
                                    MatrixBlockData<MatrixType, Id, Order::Column>>> copy() override {
-    return std::make_shared<CudaCopyInGpu>(blockTTL_, blockSize_, matrixLeadingDimension_);
+    return std::make_shared<CudaCopyInGpu>(blockTTL_, blockSize_, matrixLeadingDimension_, numCopies_);
   }
+
+  int checkProgress(int size){
+	int pending = 0;
+	for(int i=0; i <= size; i++){
+		if(blocksCopied[i]){//query for a non NULL block and push the result if the copy is completed.
+			cudaError_t status = cudaEventQuery(copyEvent[i]);
+			if(status == cudaSuccess){
+				this->addResult(blocksCopied[i]);
+				blocksCopied[i] = nullptr;
+			}
+			else if(status == cudaErrorNotReady)//count pending transfers
+				pending++;
+			else //handle the error if cuda status is other than success and in progress.
+				checkCudaErrors(status);
+		}
+	}
+	return pending;
+  }
+
 };
 
 #endif //TUTORIAL8_CUDA_COPY_IN_GPU_H

@@ -99,7 +99,7 @@ class CudaMatrixBlockData : public MatrixBlockData<Type, Id, Order::Column>,
                                         this->blockData(),
                                         res->blockSizeHeight() * res->blockSizeWidth
         () * sizeof(Type), cudaMemcpyDeviceToHost, stream));
-    checkCudaErrors(cudaStreamSynchronize(stream));
+    //checkCudaErrors(cudaStreamSynchronize(stream));
     return res;
   }
 
