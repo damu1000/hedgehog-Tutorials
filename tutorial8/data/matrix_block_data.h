@@ -143,7 +143,11 @@ class MatrixBlockData {
   void initializeComm() {comm.initializeComm();}
   void finalizeComm() {comm.finalizeComm();}
   void destroyComm() {comm.destroyComm();}
-  void setupCommPackage() {comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_);}
+  void setupCommPackage(int alignMat=0) {comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_, alignMat);}
+  void finalizeSetupComm(int alignMat=0){
+	  if(alignMat)
+		  comm.finalizeAlign();
+  }
 
   friend std::ostream &operator<<(std::ostream &os, MatrixBlockData const &data) {
     os << "MatrixBlockData " << Id << " position Grid: (" << data.rowIdx_ << ", " << data.colIdx_ << ")" << std::endl;

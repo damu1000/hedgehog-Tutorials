@@ -38,11 +38,11 @@ struct CommPackage{
 public:
 	MPI_Request reqs[2];
 	MPI_Status stats[2];
-	MatrixType *data;	//pointer to the block data
-	MatrixType *sendbuff, *recvbuff; //send and recv buffers.
-	int rank, src, dest; //self rank, source and destination ranks for this particular block
-	int n, q, leadingDimension;  //n is block size, q is sqrt(num of ranks), and leadingDimension is num of columns in local matrix patch.
-	int tag; //tag to be used for mpi comm;
+	MatrixType *data{nullptr};	//pointer to the block data
+	MatrixType *sendbuff{nullptr}, *recvbuff{nullptr}; //send and recv buffers.
+	int rank{0}, src{0}, dest{0}; //self rank, source and destination ranks for this particular block
+	int n{0}, q{0}, leadingDimension{0};  //n is block size, q is sqrt(num of ranks), and leadingDimension is num of columns in local matrix patch.
+	int tag{0}; //tag to be used for mpi comm;
 	//struct timeval  tv1, tv2;
 
 	CommPackage() = default;
@@ -91,11 +91,8 @@ public:
 			else if(Id=='b')
 				align(ALONG_COLS, - (rank%q));
 		}
-
-		copyBuffer(sendbuff, n, data, leadingDimension, n);
-//		for(int i = 0; i<n; i++) //copy values into send buffer for the first send
-//			for(int j = 0; j<n; j++)
-//				sendbuff[i*n+j] = data[i*leadingDimension+j];
+		else
+			copyBuffer(sendbuff, n, data, leadingDimension, n); //prepare send buff for first send in initComm
 	}
 
 
@@ -108,12 +105,8 @@ public:
 		assert(Id == 'a' || Id == 'b');
 		//gettimeofday(&tv1, NULL);
 
-			//copy data to sendbuff
+		//copy data to sendbuff
 		copyBuffer(sendbuff, n, data, leadingDimension, n);
-//			for(int i = 0; i<n; i++)
-//				for(int j = 0; j<n; j++)
-//					sendbuff[i*n+j] = data[i*leadingDimension+j];
-
 
 		int s , d;
 		MPI_Cart_shift(comm, direction, shift_by, &s, &d);
@@ -124,6 +117,10 @@ public:
 		//added 10k to tag. Otherwise conflicts with subsequent init comm. Do not know how, but it does.
 		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_BYTE, d, 10000+tag, comm, &reqs[0]);
 		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_BYTE, s, 10000+tag, comm, &reqs[1]);
+	}
+
+	void finalizeAlign()
+	{
 		MPI_Waitall(2, reqs, stats);	//wait till data is sent and received
 //		printf("%d Aligned for block %c - %d size: %d x %d\n", rank, Id, tag, n, n);
 
@@ -131,12 +128,14 @@ public:
 		//double seconds = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
 		//g_setupTime += seconds;
 
-			//copy data from recvbuff
+		//copy data from recvbuff
 		copyBuffer(data, leadingDimension, recvbuff, n, n);
-//			for(int i = 0; i<n; i++)
-//				for(int j = 0; j<n; j++)
-//					data[i*leadingDimension+j] = recvbuff[i*n+j];
+		//data received in this iteration is forwarded. Hence swapping send and recv buffer pointers rather than copying data
+		MatrixType *temp = sendbuff;
+		sendbuff = recvbuff;
+		recvbuff = temp;
 	}
+
 
 	void initializeComm() //start asynchronous communication
 	{
@@ -169,9 +168,6 @@ public:
 
 		//copy received A and B from recieved buffer to A and B
 		copyBuffer(data, leadingDimension, recvbuff, n, n);
-//		for(int i = 0; i<n; i++)
-//			for(int j = 0; j<n; j++)
-//				data[i*leadingDimension+j] = recvbuff[i*n+j];
 
 		//data received in this iteration is forwarded. Hence swapping send and recv buffer pointers rather than copying data
 		MatrixType *temp = sendbuff;

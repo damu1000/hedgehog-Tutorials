@@ -24,6 +24,38 @@
 #include "../data/matrix_block_data.h"
 
 
+
+//setup comm task
+template<class Type, char Id, Order Ord = Order::Column, class MBD = MatrixBlockData<Type, Id, Ord>>
+class commSetupTask : public hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>> {
+public:
+	int setupComm{1};
+
+	commSetupTask(int setupComm_=1) : hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>>("commSetup") {
+		setupComm = setupComm_;
+	}
+
+	void execute(std::shared_ptr<std::vector<std::shared_ptr<MBD>>> matBlocksVec) override {
+		//printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
+		auto matBlocks = *matBlocksVec;
+
+		for(auto &mb: matBlocks)
+			mb->setupCommPackage(setupComm);
+
+		for(auto &mb: matBlocks)
+			mb->finalizeSetupComm(setupComm);
+
+		for(auto &mb: matBlocks)
+			this->addResult(mb); //push result
+	}
+
+	std::shared_ptr<hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>>> copy() override {
+		return std::make_shared<commSetupTask<Type, Id, Ord>>();
+	}
+};
+
+
+
 //input from traversal task and pass it on to finalize and also product
 template<class Type, char Id, Order Ord = Order::Column, class MBD = MatrixBlockData<Type, Id, Ord>>
 class commInitTask : public hh::AbstractTask<MBD, MBD> {

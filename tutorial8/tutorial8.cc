@@ -64,36 +64,77 @@ public:
 
 //------------------------------------------- initialize the matrix -----------------------------------------------
 
-MatrixType * initMatrix(size_t n) // n should be rows*cols
+// Mersenne Twister Random Generator
+uint64_t timeSeed = std::chrono::system_clock::now().time_since_epoch().count();
+std::seed_seq ss{uint32_t(timeSeed & 0xffffffff), uint32_t(timeSeed >> (uint64_t) 32)};
+std::mt19937_64 rng(ss);
+std::uniform_real_distribution<MatrixType> unif(0, 10); //choose real or int
+//std::uniform_int_distribution<MatrixType> unif(0, 10);
+
+MatrixType * initMatrix(size_t block_r, size_t block_c, size_t cellPerRank, size_t m, size_t blockSize, size_t verify=0) // n should be rows*cols
 {
-	// Mersenne Twister Random Generator
-	uint64_t timeSeed = std::chrono::system_clock::now().time_since_epoch().count();
-	std::seed_seq ss{uint32_t(timeSeed & 0xffffffff), uint32_t(timeSeed >> (uint64_t) 32)};
-	std::mt19937_64 rng(ss);
-	std::uniform_real_distribution<MatrixType> unif(0, 10); //choose real or int
-	//std::uniform_int_distribution<MatrixType> unif(0, 10);
-
+	size_t n = blockSize * blockSize;
 	MatrixType *data = new MatrixType[n]();
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-	for (size_t i = 0; i < n; ++i){
-		//data[i] = unif(rng);
-		data[i] = rank*n + i;
-		//		data[i] = rank + 1;
-		//data[i] = 1;
+	if(verify){
+		int rank;
+		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+//		printf("block %lu %lu:\n", block_r, block_c);
+		for (size_t i = 0; i < blockSize; ++i){
+			for (size_t j = 0; j < blockSize; ++j){
+				//   id in cur block,     count prev ranks,        count rows from prev blcoks,       count col from prev blocks in this rank
+				data[i * blockSize + j] = rank*cellPerRank    +    (block_r * blockSize + i)*m    +   (block_c * blockSize + j);
+//				printf("%.2f\t", data[i * blockSize + j]);
+			}
+//			printf("\n");
+		}
+	}
+	else{
+		for (size_t i = 0; i < n; ++i)
+			data[i] = unif(rng);
 	}
 
 	return data;
 }
 
+//n is height and m is width
+template<class Type, char Id, typename MBD = MatrixBlockData<Type, Id, Order::Column>>
+std::shared_ptr<std::vector<std::shared_ptr<MBD>>> initMatrixBlocks(size_t n, size_t m, size_t blockSize, size_t verify) //may need to use different blockSize for m and n for irregular matrices
+{
+	size_t  nBlocks = std::ceil(n / blockSize) + (n % blockSize == 0 ? 0 : 1);
+	size_t  mBlocks = std::ceil(m / blockSize) + (m % blockSize == 0 ? 0 : 1);
+	size_t blockSizeRemainderHeight = n % blockSize;
+	size_t blockSizeRemainderWidth = m % blockSize;
 
+	std::vector<std::shared_ptr<MBD>> matblocks;
+//	printf("-------- matrix %c -----------------\n", Id);
+
+	for (size_t i = 0; i < nBlocks; ++i) {
+		size_t blockSizeHeight = blockSize;
+		if (i == nBlocks-1 && blockSizeRemainderHeight > 0) {
+			blockSizeHeight = blockSizeRemainderHeight;
+		}
+		for (size_t j = 0; j < mBlocks; ++j) {
+			size_t blockSizeWidth = blockSize;
+			if (j == mBlocks-1 &&  blockSizeRemainderWidth > 0) {
+				blockSizeWidth = blockSizeRemainderWidth;
+			}
+
+			MatrixType *blockData = initMatrix(i, j, m*n, m, blockSize, verify);
+			//Note i and j are interchanged because of col major order
+			auto block = std::make_shared<MBD>(j, i, blockSizeHeight, blockSizeWidth, blockSizeHeight, blockData, blockData);
+			matblocks.push_back(block);
+		}
+	}
+	return std::make_shared<std::vector<std::shared_ptr<MBD>>>(matblocks);
+}
 //------------------------------------------- verify with hh and without hh -----------------------------------------------
 
 #define RED   "\x1B[31m"
 #define RESET "\x1B[0m"
 
-void inline verifyProduct(double* correct, double *hh, int n, int rank)
+void inline verifyProduct(double* correct, std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>> matC, size_t n, size_t m, size_t blockSize)
 {
 	//	for(int i=0; i<n; i++){
 	//		for(int j=0; j<n; j++){
@@ -105,16 +146,44 @@ void inline verifyProduct(double* correct, double *hh, int n, int rank)
 	//		}
 	//	}
 	//	printf("output matched for rank %d!! C:\n", rank);
+	int rank;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	size_t  nBlocks = std::ceil(n / blockSize) + (n % blockSize == 0 ? 0 : 1);
+	size_t  mBlocks = std::ceil(m / blockSize) + (m % blockSize == 0 ? 0 : 1);
+//	size_t blockSizeRemainderWidth = m % blockSize;
+//	size_t blockSizeRemainderHeight = n % blockSize;
 
 	sleep(rank);
-	printf("output of rank: %d\n", rank);
-	for(int i=0; i<n; i++){
-		for(int j=0; j<n; j++){
-			const char *color = (fabs(hh[j*n + i] - correct[j*n + i]) < 1e-9 ) ? RESET : RED; //red on error
-			printf("%.1f|%s%.1f\t%s", correct[j*n + i], color, hh[j*n + i], RESET);
+	printf("----- output of rank: %d -----\n", rank);
+	size_t blockId=0;
+	for (size_t c = 0; c < mBlocks; ++c) {
+//		size_t blockSizeWidth = blockSize;
+//		if (c == mBlocks-1 &&  blockSizeRemainderWidth > 0) {
+//			blockSizeWidth = blockSizeRemainderWidth;
+//		}
+		for (size_t r = 0; r < nBlocks; ++r) {
+//			size_t blockSizeHeight = blockSize;
+//			if (r == nBlocks-1 && blockSizeRemainderHeight > 0) {
+//				blockSizeHeight = blockSizeRemainderHeight;
+//			}
+			printf("block %lu %lu\n", r, c);
+			double *hh = matC[blockId++]->blockData();
+			for(size_t i=0; i<blockSize; i++){
+				for(size_t j=0; j<blockSize; j++){
+					MatrixType hhval = hh[j*blockSize + i];
+					MatrixType correctval = correct[(c * blockSize + j)*m + (r * blockSize + i)];
+
+					const char *color = (fabs(hhval - correctval) < 1e-9 ) ? RESET : RED; //red on error
+					printf("%.1f|%s%.1f\t%s", correctval, color, hhval, RESET);
+				}
+				printf("\n");
+			}
 		}
-		printf("\n");
+
 	}
+
+
+
 }
 
 
@@ -127,6 +196,8 @@ void matMult(double *A, double *B, double *C, int n, int q)
 	CommPackage<double, 'b'> cpackB;
 	cpackA.setupCommPackage(A, n, n, 0, 0, 1); //patch is not divided into blocks. So the blockSize = leading dimension = n and rowId=colId =0
 	cpackB.setupCommPackage(B, n, n, 0, 0, 1);
+	cpackA.finalizeAlign();
+	cpackB.finalizeAlign();
 
 	for(int k=0; k<q; k++)	//main loop of Cannon's Algorithm. running it from 0 to q rather than 1 to q, otherwise we miss multiplication of 1 block.
 	{
@@ -152,39 +223,55 @@ void matMult(double *A, double *B, double *C, int n, int q)
 
 //----------------------------------------- Cannon's Algorithm. with HH. -----------------------------------------
 
-void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, size_t numberThreadAddition, MatrixType *dataA, MatrixType *dataB, MatrixType * dataC)
+void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, size_t numberThreadAddition,
+		std::shared_ptr<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'a', Order::Column>>>> &matA,
+		std::shared_ptr<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'b', Order::Column>>>> &matB,
+		std::shared_ptr<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>>> &matC
+		)
 {
 	size_t m = n, p = n;
-
-	//Exchange initial patches as per cannon's algo. setupCommPackage with align=1 for entire patch will do it. Destroy comm later. Now each block uses its own comm.
-	//Doing it per block causes race condition because blocks with alignment completed jump to next product task.
-	CommPackage<MatrixType, 'a'> commA;
-	CommPackage<MatrixType, 'b'> commB;
-	commA.setupCommPackage(dataA, n, n, 0, 0, 1);
-	commB.setupCommPackage(dataB, n, n, 0, 0, 1);
-	commA.destroyComm();
-	commB.destroyComm();
-
+//
+//	for(int i=0; i<(*matA).size(); i++){
+//		//Exchange initial patches as per cannon's algo. setupCommPackage with align=1 for entire patch will do it. Destroy comm later. Now each block uses its own comm.
+//		//Doing it per block causes race condition because blocks with alignment completed jump to next product task.
+//		CommPackage<MatrixType, 'a'> commA;
+//		CommPackage<MatrixType, 'b'> commB;
+//		commA.setupCommPackage((*matA)[i]->blockData(), n, n, 0, 0, 1);
+//		commB.setupCommPackage((*matB)[i]->blockData(), n, n, 0, 0, 1);
+//		//	commA.finalizeAlign();
+//		//	commB.finalizeAlign();
+//		commA.destroyComm();
+//		commB.destroyComm();
+//	}
 	// Wrap them to convenient object representing the matrices
-	auto matrixA = std::make_shared<MatrixData<MatrixType, 'a', Ord>>(n, m, blockSize, dataA);
-	auto matrixB = std::make_shared<MatrixData<MatrixType, 'b', Ord>>(m, p, blockSize, dataB);
-	auto matrixC = std::make_shared<MatrixData<MatrixType, 'c', Ord>>(n, p, blockSize, dataC);
+//	auto matrixA = std::make_shared<MatrixData<MatrixType, 'a', Ord>>(n, m, blockSize, dataA);
+//	auto matrixB = std::make_shared<MatrixData<MatrixType, 'b', Ord>>(m, p, blockSize, dataB);
+//	auto matrixC = std::make_shared<MatrixData<MatrixType, 'c', Ord>>(n, p, blockSize, dataC);
 
 	size_t nBlocks = std::ceil(n / blockSize) + (n % blockSize == 0 ? 0 : 1);
 	size_t mBlocks = std::ceil(m / blockSize) + (m % blockSize == 0 ? 0 : 1);
 	size_t pBlocks = std::ceil(p / blockSize) + (p % blockSize == 0 ? 0 : 1);
 
 	// Graph
+//	auto matrixMultiplicationGraph =
+//			hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>,
+//			MatrixData<MatrixType, 'a', Ord>, MatrixData<MatrixType, 'b', Ord>, MatrixData<MatrixType, 'c', Ord>>
+//			("Matrix Multiplication Graph");
+
 	auto matrixMultiplicationGraph =
-			hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>,
-			MatrixData<MatrixType, 'a', Ord>, MatrixData<MatrixType, 'b', Ord>, MatrixData<MatrixType, 'c', Ord>>
+			hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>, //output of graph
+			std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'a', Order::Column>>>, //3 inputs of the graph
+			std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'b', Order::Column>>>,
+			std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>> >
 			("Matrix Multiplication Graph");
 
-
 	// Host Tasks
-	auto taskTraversalA = std::make_shared<MatrixColumnTraversalTask<MatrixType, 'a', Order::Column>>();
-	auto taskTraversalB = std::make_shared<MatrixRowTraversalTask<MatrixType, 'b', Order::Column>>();
-	auto taskTraversalC = std::make_shared<MatrixRowTraversalTask<MatrixType, 'c', Order::Column>>();
+//	auto taskTraversalA = std::make_shared<MatrixColumnTraversalTask<MatrixType, 'a', Order::Column>>();
+//	auto taskTraversalB = std::make_shared<MatrixRowTraversalTask<MatrixType, 'b', Order::Column>>();
+//	auto taskTraversalC = std::make_shared<MatrixRowTraversalTask<MatrixType, 'c', Order::Column>>();
+	auto taskCommSetupA = std::make_shared<commSetupTask<MatrixType, 'a', Ord>>(1);
+	auto taskCommSetupB = std::make_shared<commSetupTask<MatrixType, 'b', Ord>>(1);
+	auto taskCommSetupC = std::make_shared<commSetupTask<MatrixType, 'c', Ord>>(0); // do not setup comm, just push the blocks
 	auto additionTask = std::make_shared<AdditionTask<MatrixType, Ord>>(numberThreadAddition);
 
 	// comm tasks
@@ -240,12 +327,19 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto stateManagerCannonB = std::make_shared<CannonStateManager<MatrixType, 'b', Ord>>(stateCannonB);
 
 	// Build the graph
-	matrixMultiplicationGraph.input(taskTraversalA);
-	matrixMultiplicationGraph.input(taskTraversalB);
-	matrixMultiplicationGraph.input(taskTraversalC);
+//	matrixMultiplicationGraph.input(taskTraversalA);
+//	matrixMultiplicationGraph.input(taskTraversalB);
+//	matrixMultiplicationGraph.input(taskTraversalC);
+//
+//	matrixMultiplicationGraph.addEdge(taskTraversalA, taskCommInitA);          //1. pass A / B to init. init will call MPI send-recv for these blocks
+//	matrixMultiplicationGraph.addEdge(taskTraversalB, taskCommInitB);
 
-	matrixMultiplicationGraph.addEdge(taskTraversalA, taskCommInitA);          //1. pass A / B to init. init will call MPI send-recv for these blocks
-	matrixMultiplicationGraph.addEdge(taskTraversalB, taskCommInitB);
+	matrixMultiplicationGraph.input(taskCommSetupA);
+	matrixMultiplicationGraph.input(taskCommSetupB);
+	matrixMultiplicationGraph.input(taskCommSetupC);
+
+	matrixMultiplicationGraph.addEdge(taskCommSetupA, taskCommInitA);          //1. pass A / B to init. init will call MPI send-recv for these blocks
+	matrixMultiplicationGraph.addEdge(taskCommSetupB, taskCommInitB);
 
 	// Copy the blocks to the device (NVIDIA GPU)
 	matrixMultiplicationGraph.addEdge(taskCommInitA, copyInATask);             //2. pass on the updated blocks to gpu for compute
@@ -266,7 +360,8 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.addEdge(copyOutTask, stateManagerPartialComputation);
 
 	// Use the same graph for the accumulation
-	matrixMultiplicationGraph.addEdge(taskTraversalC, stateManagerPartialComputation);
+//	matrixMultiplicationGraph.addEdge(taskTraversalC, stateManagerPartialComputation);
+	matrixMultiplicationGraph.addEdge(taskCommSetupC, stateManagerPartialComputation);
 	matrixMultiplicationGraph.addEdge(stateManagerPartialComputation, additionTask);
 	matrixMultiplicationGraph.addEdge(additionTask, stateManagerPartialComputation);
 	matrixMultiplicationGraph.addEdge(additionTask, stateManagerOutputBlock);
@@ -285,9 +380,13 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.executeGraph();
 
 	// Push the matrices
-	matrixMultiplicationGraph.pushData(matrixA);
-	matrixMultiplicationGraph.pushData(matrixB);
-	matrixMultiplicationGraph.pushData(matrixC);
+//	matrixMultiplicationGraph.pushData(matrixA);
+//	matrixMultiplicationGraph.pushData(matrixB);
+//	matrixMultiplicationGraph.pushData(matrixC);
+
+	matrixMultiplicationGraph.pushData(matA);
+	matrixMultiplicationGraph.pushData(matB);
+	matrixMultiplicationGraph.pushData(matC);
 
 	// Notify push done
 	matrixMultiplicationGraph.finishPushingData();
@@ -379,59 +478,59 @@ int main(int argc, char **argv)
 	createCartComm(q);
 
 	//--------------------------------- Allocate and init the matrices -----------------------------------------------
-	MatrixType *dataA = initMatrix(n * m);
-	MatrixType *dataB = initMatrix(m * p);
-	MatrixType *dataC = initMatrix(n * p);
 
+//	sleep(rank);
+	auto matA = initMatrixBlocks<MatrixType, 'a'>(n, m, blockSize, verify);
+	auto matB = initMatrixBlocks<MatrixType, 'b'>(m, p, blockSize, verify);
+	auto matC = initMatrixBlocks<MatrixType, 'c'>(n, p, blockSize, verify);
 
+	//--------------------------------- distributed DGEMM -----------------------------------------------
+	if(verify){
+		for(auto &blockC: *matC)
+			memset(blockC->blockData(), 0, blockSize*blockSize*sizeof(MatrixType)); //reset C to verify.
+		matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
 
-	  //--------------------------------- distributed DGEMM -----------------------------------------------
-	  if(verify){
-		  memset(dataC, 0, n*n*sizeof(MatrixType)); //reset C to verify.
-		  //printf("running HH:\n");
-		  matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, dataA, dataB, dataC);
+//		sleep(rank);
+		MatrixType *C = initMatrix(0, 0, m*n, n, n, verify); //using simple 1 block for manual matmult
+		MatrixType *A = initMatrix(0, 0, n*p, n, n, verify);
+		MatrixType *B = initMatrix(0, 0, m*p, n, n, verify);
+		memset(C, 0, n*n*sizeof(MatrixType));
+		matMult(A, B, C, n, q);
+		verifyProduct(C, *matC, p, n, blockSize);
 
-		  MatrixType *C = initMatrix(n * p);
-		  MatrixType *A = initMatrix(n * m);
-		  MatrixType *B = initMatrix(m * p);
-		  memset(C, 0, n*n*sizeof(MatrixType));
-		  //printf("running no HH:\n");
-		  matMult(A, B, C, n, q);
-		  verifyProduct(C, dataC, n, rank);
+		delete[] A;
+		delete[] B;
+		delete[] C;
 
-		  delete[] A;
-		  delete[] B;
-		  delete[] C;
+	}
+	else{//measure performance
+		double seconds = 0, iterations = 20.0;
+		struct timeval  tv1, tv2;
 
-	  }
-	  else{//measure performance
-		  double seconds = 0, iterations = 20.0;
-		  struct timeval  tv1, tv2;
+		for(int i=0; i<iterations; i++){
+			gettimeofday(&tv1, NULL);
 
-		  for(int i=0; i<iterations; i++){
-			  gettimeofday(&tv1, NULL);
+			//call matrix multiply
+			matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
 
-			  //call matrix multiply
-			  matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, dataA, dataB, dataC);
+			gettimeofday(&tv2, NULL);
+			seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
+		}
+		double perProc[3] = {g_setupTime, g_commTime, seconds}, averageTime[3]={0, 0, 0}; //0th is setup time, 1st is comm time, 2nd is total time
 
-			  gettimeofday(&tv2, NULL);
-			  seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
-		  }
-		  double perProc[3] = {g_setupTime, g_commTime, seconds}, averageTime[3]={0, 0, 0}; //0th is setup time, 1st is comm time, 2nd is total time
+		MPI_Reduce(perProc, averageTime, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-		  MPI_Reduce(perProc, averageTime, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
-		  if(rank==0)
-			  printf(" Setup time: %f\n Comm time: %f seconds\n Comp time: %f seconds\n Total time: %f seconds\n",
-					  averageTime[0]/(double)size/iterations, averageTime[1]/(double)size/iterations, (averageTime[2]-averageTime[0]-averageTime[1])/(double)size/iterations, averageTime[2]/(double)size/iterations  );
-	  }
+		if(rank==0)
+			printf(" Setup time: %f\n Comm time: %f seconds\n Comp time: %f seconds\n Total time: %f seconds\n",
+					averageTime[0]/(double)size/iterations, averageTime[1]/(double)size/iterations, (averageTime[2]-averageTime[0]-averageTime[1])/(double)size/iterations, averageTime[2]/(double)size/iterations  );
+	}
 
 
 
 	  //--------------------------------- Deallocate the Matrices ---------------------------------
-	delete[] dataA;
-	delete[] dataB;
-	delete[] dataC;
+//	for(auto &blockA: *matA) delete[] blockA->blockData(); //is it needed? Will shared pointer automatically deallocate???
+//	for(auto &blockB: *matB) delete[] blockB->blockData();
+//	for(auto &blockC: *matC) delete[] blockC->blockData();
 
 	MPI_Finalize();
 
