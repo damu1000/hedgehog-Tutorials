@@ -42,11 +42,10 @@ public:
 		for(auto &mb: matBlocks)
 			mb->setupCommPackage(setupComm);
 
-		for(auto &mb: matBlocks)
+		for(auto &mb: matBlocks){
 			mb->finalizeSetupComm(setupComm);
-
-		for(auto &mb: matBlocks)
 			this->addResult(mb); //push result
+		}
 	}
 
 	std::shared_ptr<hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>>> copy() override {
@@ -110,9 +109,6 @@ public:
 					this->addResult(m); //push result
 				}
 			}
-//			for(auto &m : matBlock){
-//				this->addResult(m); //push result
-//			}
 		}
 	}
 

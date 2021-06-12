@@ -181,9 +181,6 @@ void inline verifyProduct(double* correct, std::vector<std::shared_ptr<MatrixBlo
 		}
 
 	}
-
-
-
 }
 
 
@@ -230,34 +227,11 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 		)
 {
 	size_t m = n, p = n;
-//
-//	for(size_t i=0; i<(*matA).size(); i++){
-//		//Exchange initial patches as per cannon's algo. setupCommPackage with align=1 for entire patch will do it. Destroy comm later. Now each block uses its own comm.
-//		//Doing it per block causes race condition because blocks with alignment completed jump to next product task.
-//		CommPackage<MatrixType, 'a'> commA;
-//		CommPackage<MatrixType, 'b'> commB;
-//		commA.setupCommPackage((*matA)[i]->blockData(), blockSize, n, (*matA)[i]->rowIdx(), (*matA)[i]->colIdx(), 1);
-//		commB.setupCommPackage((*matB)[i]->blockData(), blockSize, n, (*matB)[i]->rowIdx(), (*matB)[i]->colIdx(), 1);
-//		commA.finalizeAlign();
-//		commB.finalizeAlign();
-//		commA.destroyComm();
-//		commB.destroyComm();
-//	}
-	// Wrap them to convenient object representing the matrices
-//	auto matrixA = std::make_shared<MatrixData<MatrixType, 'a', Ord>>(n, m, blockSize, dataA);
-//	auto matrixB = std::make_shared<MatrixData<MatrixType, 'b', Ord>>(m, p, blockSize, dataB);
-//	auto matrixC = std::make_shared<MatrixData<MatrixType, 'c', Ord>>(n, p, blockSize, dataC);
-
 	size_t nBlocks = std::ceil(n / blockSize) + (n % blockSize == 0 ? 0 : 1);
 	size_t mBlocks = std::ceil(m / blockSize) + (m % blockSize == 0 ? 0 : 1);
 	size_t pBlocks = std::ceil(p / blockSize) + (p % blockSize == 0 ? 0 : 1);
 
 	// Graph
-//	auto matrixMultiplicationGraph =
-//			hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>,
-//			MatrixData<MatrixType, 'a', Ord>, MatrixData<MatrixType, 'b', Ord>, MatrixData<MatrixType, 'c', Ord>>
-//			("Matrix Multiplication Graph");
-
 	auto matrixMultiplicationGraph =
 			hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>, //output of graph
 			std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'a', Order::Column>>>, //3 inputs of the graph
@@ -266,9 +240,6 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 			("Matrix Multiplication Graph");
 
 	// Host Tasks
-//	auto taskTraversalA = std::make_shared<MatrixColumnTraversalTask<MatrixType, 'a', Order::Column>>();
-//	auto taskTraversalB = std::make_shared<MatrixRowTraversalTask<MatrixType, 'b', Order::Column>>();
-//	auto taskTraversalC = std::make_shared<MatrixRowTraversalTask<MatrixType, 'c', Order::Column>>();
 	auto taskCommSetupA = std::make_shared<commSetupTask<MatrixType, 'a', Ord>>(1);
 	auto taskCommSetupB = std::make_shared<commSetupTask<MatrixType, 'b', Ord>>(1);
 	auto taskCommSetupC = std::make_shared<commSetupTask<MatrixType, 'c', Ord>>(0); // do not setup comm, just push the blocks
@@ -327,13 +298,6 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto stateManagerCannonB = std::make_shared<CannonStateManager<MatrixType, 'b', Ord>>(stateCannonB);
 
 	// Build the graph
-//	matrixMultiplicationGraph.input(taskTraversalA);
-//	matrixMultiplicationGraph.input(taskTraversalB);
-//	matrixMultiplicationGraph.input(taskTraversalC);
-//
-//	matrixMultiplicationGraph.addEdge(taskTraversalA, taskCommInitA);          //1. pass A / B to init. init will call MPI send-recv for these blocks
-//	matrixMultiplicationGraph.addEdge(taskTraversalB, taskCommInitB);
-
 	matrixMultiplicationGraph.input(taskCommSetupA);
 	matrixMultiplicationGraph.input(taskCommSetupB);
 	matrixMultiplicationGraph.input(taskCommSetupC);
@@ -360,7 +324,6 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.addEdge(copyOutTask, stateManagerPartialComputation);
 
 	// Use the same graph for the accumulation
-//	matrixMultiplicationGraph.addEdge(taskTraversalC, stateManagerPartialComputation);
 	matrixMultiplicationGraph.addEdge(taskCommSetupC, stateManagerPartialComputation);
 	matrixMultiplicationGraph.addEdge(stateManagerPartialComputation, additionTask);
 	matrixMultiplicationGraph.addEdge(additionTask, stateManagerPartialComputation);
@@ -380,10 +343,6 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.executeGraph();
 
 	// Push the matrices
-//	matrixMultiplicationGraph.pushData(matrixA);
-//	matrixMultiplicationGraph.pushData(matrixB);
-//	matrixMultiplicationGraph.pushData(matrixC);
-
 	matrixMultiplicationGraph.pushData(matA);
 	matrixMultiplicationGraph.pushData(matB);
 	matrixMultiplicationGraph.pushData(matC);
@@ -394,10 +353,9 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// Wait for the graph to terminate
 	matrixMultiplicationGraph.waitForTermination();
 
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-	matrixMultiplicationGraph.createDotFile(std::string("graph_"  + std::to_string(rank) + ".dot"), hh::ColorScheme::EXECUTION,
-			hh::StructureOptions::NONE);
+//	int rank;
+//	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+//	matrixMultiplicationGraph.createDotFile(std::string("graph_"  + std::to_string(rank) + ".dot"), hh::ColorScheme::NONE, hh::StructureOptions::ALL);
 
 }
 
@@ -479,7 +437,6 @@ int main(int argc, char **argv)
 
 	//--------------------------------- Allocate and init the matrices -----------------------------------------------
 
-//	sleep(rank);
 	auto matA = initMatrixBlocks<MatrixType, 'a'>(n, m, blockSize, verify);
 	auto matB = initMatrixBlocks<MatrixType, 'b'>(m, p, blockSize, verify);
 	auto matC = initMatrixBlocks<MatrixType, 'c'>(n, p, blockSize, verify);
@@ -490,7 +447,6 @@ int main(int argc, char **argv)
 			memset(blockC->blockData(), 0, blockSize*blockSize*sizeof(MatrixType)); //reset C to verify.
 		matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
 
-//		sleep(rank);
 		MatrixType *C = initMatrix(0, 0, m*n, n, n, verify); //using simple 1 block for manual matmult
 		MatrixType *A = initMatrix(0, 0, n*p, n, n, verify);
 		MatrixType *B = initMatrix(0, 0, m*p, n, n, verify);
@@ -528,9 +484,9 @@ int main(int argc, char **argv)
 
 
 	  //--------------------------------- Deallocate the Matrices ---------------------------------
-//	for(auto &blockA: *matA) delete[] blockA->blockData(); //is it needed? Will shared pointer automatically deallocate???
-//	for(auto &blockB: *matB) delete[] blockB->blockData();
-//	for(auto &blockC: *matC) delete[] blockC->blockData();
+	for(auto &blockA: *matA) delete[] blockA->blockData(); //is it needed? Will shared pointer automatically deallocate???
+	for(auto &blockB: *matB) delete[] blockB->blockData();
+	for(auto &blockC: *matC) delete[] blockC->blockData();
 
 	MPI_Finalize();
 
