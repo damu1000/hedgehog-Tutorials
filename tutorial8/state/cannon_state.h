@@ -31,11 +31,7 @@ public:
 	//ttl_ should be num of blocks locally. Note ttl is set to ttl_ * (q-1) to cover iterations of cannon's algo.
 	//q-1 because no need to loop back after the last iteration.
 	CannonState(int ttl_, int q) : ttl(ttl_ * (q-1)) {}
-	bool isDone() {
-//		if(ttl==0)
-//			matBlock->destroyComm();
-		return ttl == 0;
-	};
+	bool isDone() { return ttl == 0; };
 
 	void execute(std::shared_ptr<MBD> inputparams) override {
 		matBlock = inputparams;

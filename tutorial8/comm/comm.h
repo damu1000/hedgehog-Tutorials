@@ -175,19 +175,22 @@ public:
 		recvbuff = temp;
 	}
 
-	void destroyComm(int alignMat=0)
+	void destroyComm()//(int alignMat=0)
 	{
 		if(Id != 'a' && Id != 'b') return; // no need to destroy for ids other than a and b
 
+		//no need to align again. will be copied from backup copy in matrix_block_data
 		//After the last iteration, align A and B back to old positions - same displacement with opposite direction
-		if(alignMat==1){
-			if(Id=='a')
-				align(ALONG_ROWS, (rank/q));
-			else if (Id=='b')
-				align(ALONG_COLS, (rank%q));
-		}
+//		if(alignMat==1){
+//			if(Id=='a')
+//				align(ALONG_ROWS, (rank/q));
+//			else if (Id=='b')
+//				align(ALONG_COLS, (rank%q));
+//		}
 		delete []sendbuff;
 		delete []recvbuff;
+		sendbuff = nullptr;
+		recvbuff = nullptr;
 	}
 };
 

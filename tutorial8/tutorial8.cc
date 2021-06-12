@@ -62,6 +62,12 @@ public:
 };
 
 
+
+double computeMatrixMultiplicationGFLOPS(size_t n, size_t m, size_t p, double duration) {
+  return ((double) n * (double) m * (double) p * 2. * 1.0e-9) / duration;
+}
+
+
 //------------------------------------------- initialize the matrix -----------------------------------------------
 
 // Mersenne Twister Random Generator
@@ -122,8 +128,13 @@ std::shared_ptr<std::vector<std::shared_ptr<MBD>>> initMatrixBlocks(size_t n, si
 			}
 
 			MatrixType *blockData = initMatrix(i, j, m*n, m, blockSize, verify);
+			MatrixType *dupBlockData = nullptr;
+			if(Id=='a' || Id=='b'){
+				dupBlockData = new MatrixType[blockSize*blockSize]; //make a copy of original block data. Avoids 1 comm at the end to restore data
+				memcpy(dupBlockData, blockData, blockSize*blockSize*sizeof(MatrixType));
+			}
 			//Note i and j are interchanged because of col major order
-			auto block = std::make_shared<MBD>(j, i, blockSizeHeight, blockSizeWidth, blockSizeHeight, blockData, blockData);
+			auto block = std::make_shared<MBD>(j, i, blockSizeHeight, blockSizeWidth, blockSizeHeight, blockData, blockData, dupBlockData);
 			matblocks.push_back(block);
 		}
 	}
@@ -261,7 +272,7 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// MemoryManagers
 	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 16, blockSize);
 	auto cudaMemoryManagerB = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'b'>, size_t>>(pBlocks + 16, blockSize);
-	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(16, blockSize);
+	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(32, blockSize);
 
 	// Connect the memory manager
 	productTask->connectMemoryManager(cudaMemoryManagerProduct);
@@ -352,6 +363,10 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 
 	// Wait for the graph to terminate
 	matrixMultiplicationGraph.waitForTermination();
+
+	//release comm buffers
+	for(auto &blockA: *matA) blockA->destroyComm(); //is it needed? Will shared pointer automatically deallocate???
+	for(auto &blockB: *matB) blockB->destroyComm();
 
 //	int rank;
 //	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -460,33 +475,39 @@ int main(int argc, char **argv)
 
 	}
 	else{//measure performance
-		double seconds = 0, iterations = 20.0;
+		double seconds = 0, iterations = 10.0;
 		struct timeval  tv1, tv2;
 
-		for(int i=0; i<iterations; i++){
-			gettimeofday(&tv1, NULL);
-
+		for(int i=0; i<iterations/2; i++){ //warm up
 			//call matrix multiply
 			matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
-
-			gettimeofday(&tv2, NULL);
-			seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
 		}
+
+		gettimeofday(&tv1, NULL);
+		for(int i=0; i<iterations; i++){
+			//call matrix multiply
+			matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
+		}
+		gettimeofday(&tv2, NULL);
+		seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
+
 		double perProc[3] = {g_setupTime, g_commTime, seconds}, averageTime[3]={0, 0, 0}; //0th is setup time, 1st is comm time, 2nd is total time
 
 		MPI_Reduce(perProc, averageTime, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-		if(rank==0)
+		if(rank==0){
 			printf(" Setup time: %f\n Comm time: %f seconds\n Comp time: %f seconds\n Total time: %f seconds\n",
 					averageTime[0]/(double)size/iterations, averageTime[1]/(double)size/iterations, (averageTime[2]-averageTime[0]-averageTime[1])/(double)size/iterations, averageTime[2]/(double)size/iterations  );
+			printf("GFLOPS / GPU: %f\n", computeMatrixMultiplicationGFLOPS(N, N, N, averageTime[2]/(double)size/iterations));
+		}
 	}
 
 
 
 	  //--------------------------------- Deallocate the Matrices ---------------------------------
-	for(auto &blockA: *matA) delete[] blockA->blockData(); //is it needed? Will shared pointer automatically deallocate???
-	for(auto &blockB: *matB) delete[] blockB->blockData();
-	for(auto &blockC: *matC) delete[] blockC->blockData();
+	for(auto &blockA: *matA) blockA->destroy(); //is it needed? Will shared pointer automatically deallocate???
+	for(auto &blockB: *matB) blockB->destroy();
+	for(auto &blockC: *matC) blockC->destroy();
 
 	MPI_Finalize();
 

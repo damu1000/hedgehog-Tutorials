@@ -35,6 +35,7 @@ class MatrixBlockData {
   size_t leadingDimension_ = 0;
   Type *fullMatrixData_ = nullptr;
   Type *blockData_ = nullptr;
+  Type *dupBlockData_ = nullptr;
   CommPackage<Type, Id> comm; //comm package for this block. Ensure setupCommPackage is called in every constructor
 
  public:
@@ -45,13 +46,15 @@ class MatrixBlockData {
                   size_t blockSizeWidth,
                   size_t leadingDimension,
                   Type *fullMatrixData,
-                  Type *blockData) : rowIdx_(rowIdx),
+                  Type *blockData,
+				  Type *dupBlockData=nullptr) : rowIdx_(rowIdx),
                                      colIdx_(colIdx),
                                      blockSizeHeight_(blockSizeHeight),
                                      blockSizeWidth_(blockSizeWidth),
                                      leadingDimension_(leadingDimension),
                                      fullMatrixData_(fullMatrixData),
-                                     blockData_(blockData) {
+                                     blockData_(blockData),
+									 dupBlockData_(dupBlockData){
     if (blockSizeHeight_ == 0 || blockSizeWidth_ == 0) {
       std::cout << "Can't compute an empty matrix block" << std::endl;
     }
@@ -138,11 +141,20 @@ class MatrixBlockData {
   void leadingDimension(size_t leadingDimension) { leadingDimension_ = leadingDimension; }
   void fullMatrixData(Type *fullMatrixData) { fullMatrixData_ = fullMatrixData; }
   void blockData(Type *blockData) { blockData_ = blockData; }
+  void destroy(){
+	  if(blockData_) delete[] blockData_;
+	  if(dupBlockData_) delete[] dupBlockData_;
+	  dupBlockData_ = nullptr;
+	  blockData_ = nullptr;
+  }
 
   //comm methods for this block
   void initializeComm() {comm.initializeComm();}
   void finalizeComm() {comm.finalizeComm();}
-  void destroyComm() {comm.destroyComm();}
+  void destroyComm() {
+	  memcpy(blockData_, dupBlockData_ , blockSizeHeight_*blockSizeWidth_*sizeof(Type)); //restore original block data. Avoid 1 comm
+	  comm.destroyComm();
+  }
   void setupCommPackage(int alignMat=0) {comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_, alignMat);}
   void finalizeSetupComm(int alignMat=0){
 	  if(alignMat)

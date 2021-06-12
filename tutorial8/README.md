@@ -1,8 +1,12 @@
 ## Tutorial 8: Distributed GEMM on GPUs
 
-Under development: This is a basic working version. 
+This is a basic working version. A combination of Tutorials 4 and 7.
 
-combination of Tutorials 4 and 7.
+Getting 15% of peak on 4 Titan V GPUs using 4 MPI ranks for 16k x 16k matrix. To Do to get performance: 
+- Try different matrix size, block size, and thread countss.
+- Product task calls streamsync. Try to avoid.
+- Merge Copy out task into product task.
+- Move addition task to GPU? It will save a lot of PCI bandwidth. Assign one cuda stream for every output block.
 
 Steps to convert a single node GEMM HH graph to multinode MPI graph.
 - Add "comm" directory with comm.h and comm_tasks.h. Ensure order is correct either row major or column major.
