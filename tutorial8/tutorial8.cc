@@ -288,9 +288,9 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto copyOutTask = std::make_shared<CudaCopyOutGpu<MatrixType>>(blockSize, nBlocks * mBlocks * pBlocks);
 
 	// MemoryManagers
-	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 4, blockSize);
-	auto cudaMemoryManagerB = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'b'>, size_t>>(pBlocks + 4, blockSize);
-	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(8, blockSize);
+	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 16, blockSize);
+	auto cudaMemoryManagerB = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'b'>, size_t>>(pBlocks + 16, blockSize);
+	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(16, blockSize);
 
 	// Connect the memory manager
 	productTask->connectMemoryManager(cudaMemoryManagerProduct);
