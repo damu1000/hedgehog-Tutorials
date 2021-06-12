@@ -231,15 +231,15 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 {
 	size_t m = n, p = n;
 //
-//	for(int i=0; i<(*matA).size(); i++){
+//	for(size_t i=0; i<(*matA).size(); i++){
 //		//Exchange initial patches as per cannon's algo. setupCommPackage with align=1 for entire patch will do it. Destroy comm later. Now each block uses its own comm.
 //		//Doing it per block causes race condition because blocks with alignment completed jump to next product task.
 //		CommPackage<MatrixType, 'a'> commA;
 //		CommPackage<MatrixType, 'b'> commB;
-//		commA.setupCommPackage((*matA)[i]->blockData(), n, n, 0, 0, 1);
-//		commB.setupCommPackage((*matB)[i]->blockData(), n, n, 0, 0, 1);
-//		//	commA.finalizeAlign();
-//		//	commB.finalizeAlign();
+//		commA.setupCommPackage((*matA)[i]->blockData(), blockSize, n, (*matA)[i]->rowIdx(), (*matA)[i]->colIdx(), 1);
+//		commB.setupCommPackage((*matB)[i]->blockData(), blockSize, n, (*matB)[i]->rowIdx(), (*matB)[i]->colIdx(), 1);
+//		commA.finalizeAlign();
+//		commB.finalizeAlign();
 //		commA.destroyComm();
 //		commB.destroyComm();
 //	}

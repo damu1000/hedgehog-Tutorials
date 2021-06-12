@@ -53,7 +53,7 @@ public:
 		n = _n;
 		leadingDimension = _leadingDimension;
 		tag = _rowIdx * (leadingDimension / n) + _colIdx; //this is basically the position of the block in the local patch. This will give unique tags to each block. leadingDimension / n gives num of blocks along x dimension
-		tag = 2*tag + Id == 'a' ? 0 : 1;
+		tag = 2*tag + (Id == 'a' ? 0 : 1);
 		int size;
 		MPI_Comm_rank(comm, &rank);
 		MPI_Comm_size(comm, &size);
