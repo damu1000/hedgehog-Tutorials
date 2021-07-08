@@ -21,6 +21,8 @@
 #define TUTORIAL8_CUDA_COPY_OUT_GPU_H
 #include <hedgehog/hedgehog.h>
 #include "../data/cuda_matrix_block_data.h"
+#include <atomic>
+#include "cuda_streams.h"
 
 template<class MatrixType>
 class CudaCopyOutGpu
@@ -99,4 +101,116 @@ class CudaCopyOutGpu
   }
 };
 
+
+
+
+extern "C"{
+void vectorAdd(double *dest, double *src, size_t n, cudaStream_t stream);
+void vectorPrint(double *v, size_t n, cudaStream_t stream);
+}
+
+
+template<class MatrixType>
+class CudaCopyOutGpuC
+    : public hh::AbstractCUDATask<MatrixBlockData<MatrixType, 'c', Order::Column>, //output to output state (or graph out put itself ??)
+	  	  	  	  	  	  	  	  MatrixBlockData<MatrixType, 'c', Order::Column>> {  //input is MatrixBlockData, but it contains the device pointer.
+ private:
+
+  size_t nBlocks=0, mBlocks=0, pBlocks=0, numCopies=0;
+  std::shared_ptr<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>>> matCHost;
+
+  std::atomic<int> id{0};
+  std::vector<cudaEvent_t> copyEvent;
+  std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>> blocksCopied;
+
+ public:
+  explicit CudaCopyOutGpuC( size_t nBlocks_, size_t mBlocks_, size_t pBlocks_,
+		                    std::shared_ptr<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>>> matCHost_)
+      : hh::AbstractCUDATask<MatrixBlockData<MatrixType, 'c', Order::Column>, //output to output state (or graph out put itself ??)
+	  	  	  	  	  	  	 MatrixBlockData<MatrixType, 'c', Order::Column>>
+            ("Copy Out GPU C", 1, false, false),
+			nBlocks(nBlocks_), mBlocks(mBlocks_), pBlocks(pBlocks_), matCHost(matCHost_){
+
+	  numCopies = nBlocks * pBlocks;
+	  copyEvent = std::vector<cudaEvent_t>(numCopies);
+	  blocksCopied = std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>> (numCopies, nullptr);
+
+	  for(size_t i=0; i<numCopies; i++)
+		  checkCudaErrors(cudaEventCreate(&copyEvent[i]));
+
+  }
+
+  ~CudaCopyOutGpuC(){
+	  for(size_t i=0; i<numCopies; i++)
+	    checkCudaErrors(cudaEventDestroy(copyEvent[i]));
+  }
+
+  void execute(std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>> dC) override { //device MatrixBlockData is passed as input
+	    int myid = id++;
+	    numCopies --;
+
+	  //get host MatrixBlockData
+	  auto hC = (*(matCHost))[dC->colIdx() * nBlocks + dC->rowIdx()]; //dC->colIdx() * nBlocks + dC->rowIdx()
+
+	  assert(dC->rowIdx() == hC->rowIdx() && dC->colIdx() == hC->colIdx());
+
+	  //call the kernel to add c and p
+	  auto stream = cudaStreams::getStream(dC->rowIdx(), dC->colIdx());
+
+	  cudaPointerAttributes att;
+
+	  checkCudaErrors(cudaPointerGetAttributes ( &att, dC->blockData()));
+
+	  size_t size = dC->blockSizeHeight() * dC->blockSizeWidth() * sizeof(MatrixType);
+
+//	  vectorPrint(dC->blockData(), dC->blockSizeHeight() * dC->blockSizeWidth(), stream);
+//	  checkCudaErrors(cudaStreamSynchronize(stream));
+
+	  checkCudaErrors(cudaMemcpyAsync(hC->blockData(), dC->blockData(), size, cudaMemcpyDeviceToHost, stream));
+
+//	  checkCudaErrors(cudaStreamSynchronize(stream));
+
+	  //cudaLaunchHostFunc did not work here, because it can not access "this" to addResult. Have to use events
+	  checkCudaErrors(cudaEventRecord(copyEvent[myid], stream)); //record event and store the block
+
+	  assert(blocksCopied[myid] == nullptr);
+	  blocksCopied[myid] = hC;
+
+//	  checkProgress(myid);
+
+	  if(numCopies == 0){                 // if this is the last block,
+		  while(checkProgress(myid) > 0); // wait until all pending transfers are over
+		  myid = 0;
+		  id = 0;
+		  numCopies = nBlocks * pBlocks;
+	  }
+  }
+
+
+  int checkProgress(int size){
+	  int pending = 0;
+	  for(int i=0; i <= size; i++){
+		  if(blocksCopied[i]){//query for a non NULL block and push the result if the copy is completed.
+			  cudaError_t status = cudaEventQuery(copyEvent[i]);
+			  if(status == cudaSuccess){
+				  this->addResult(blocksCopied[i]);
+				  blocksCopied[i] = nullptr;
+			  }
+			  else if(status == cudaErrorNotReady)//count pending transfers
+				  pending++;
+			  else //handle the error if cuda status is other than success and in progress.
+				  checkCudaErrors(status);
+		  }
+	  }
+	  return pending;
+  }
+
+
+  std::shared_ptr<hh::AbstractTask<MatrixBlockData<MatrixType, 'c', Order::Column>,
+	  	  	  	  	  	  	  	   MatrixBlockData<MatrixType, 'c', Order::Column>>> copy() override {
+    return std::make_shared<CudaCopyOutGpuC>(nBlocks, mBlocks, pBlocks, matCHost );
+  }
+
+
+};
 #endif //TUTORIAL8_CUDA_COPY_OUT_GPU_H

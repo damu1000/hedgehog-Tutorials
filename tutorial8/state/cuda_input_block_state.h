@@ -62,7 +62,7 @@ class CudaInputBlockState : public hh::AbstractState<
   void execute([[maybe_unused]]std::shared_ptr<CudaMatrixBlockData<Type, 'a'>> ptr) override {
     matrixA(ptr);
     for (size_t jB = 0; jB < gridWidthRight_; ++jB) {
-      if (auto bB = matrixB(ptr->colIdx(), jB)) {
+      if (auto bB = matrixB(ptr->colIdx(), jB, ptr->cannonIteration())) {
         ttlA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()]
             = ttlA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()] - 1;
         if (ttlA_[ptr->rowIdx() * gridSharedDimension_ + ptr->colIdx()] == 0) {
@@ -81,7 +81,7 @@ class CudaInputBlockState : public hh::AbstractState<
   void execute([[maybe_unused]]std::shared_ptr<CudaMatrixBlockData<Type, 'b'>> ptr) override {
     matrixB(ptr);
     for (size_t iA = 0; iA < gridHeightLeft_; ++iA) {
-      if (auto bA = matrixA(iA, ptr->rowIdx())) {
+      if (auto bA = matrixA(iA, ptr->rowIdx(), ptr->cannonIteration())) {
         ttlB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()]
             = ttlB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()] - 1;
         if (ttlB_[ptr->rowIdx() * gridWidthRight_ + ptr->colIdx()] == 0) {
@@ -98,9 +98,10 @@ class CudaInputBlockState : public hh::AbstractState<
   }
 
  private:
-  std::shared_ptr<CudaMatrixBlockData<Type, 'a'>> matrixA(size_t i, size_t j) {
+  std::shared_ptr<CudaMatrixBlockData<Type, 'a'>> matrixA(size_t i, size_t j, size_t cannonIteration) {
     std::shared_ptr<CudaMatrixBlockData<Type, 'a'>> res = nullptr;
     if ((res = gridMatrixA_[i * gridSharedDimension_ + j])) {
+      if(res->cannonIteration() != cannonIteration) return nullptr; //return block only Cannon's iterations match for both
       ttlA_[i * gridSharedDimension_ + j] = ttlA_[i * gridSharedDimension_ + j] - 1;
       if (ttlA_[i * gridSharedDimension_ + j] == 0) {
     	ttlA_[i * gridSharedDimension_ + j] = gridWidthRight_;  //reset for the next Cannon's iteration
@@ -110,9 +111,10 @@ class CudaInputBlockState : public hh::AbstractState<
     return res;
   }
 
-  std::shared_ptr<CudaMatrixBlockData<Type, 'b'>> matrixB(size_t i, size_t j) {
+  std::shared_ptr<CudaMatrixBlockData<Type, 'b'>> matrixB(size_t i, size_t j, size_t cannonIteration) {
     std::shared_ptr<CudaMatrixBlockData<Type, 'b'>> res = nullptr;
     if ((res = gridMatrixB_[i * gridWidthRight_ + j])) {
+      if(res->cannonIteration() != cannonIteration) return nullptr; //return block only Cannon's iterations match for both
       ttlB_[i * gridWidthRight_ + j] = ttlB_[i * gridWidthRight_ + j] - 1;
       if (ttlB_[i * gridWidthRight_ + j] == 0) {
 	    ttlB_[i * gridWidthRight_ + j] =  gridHeightLeft_; //reset for the next Cannon's iteration

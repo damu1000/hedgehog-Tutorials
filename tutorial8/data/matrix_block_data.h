@@ -33,6 +33,7 @@ class MatrixBlockData {
   size_t blockSizeHeight_ = 0;
   size_t blockSizeWidth_ = 0;
   size_t leadingDimension_ = 0;
+  size_t cannonIteration_ = 0; //incremented in every finalize comm. This must match for the blocks being multiplied
   Type *fullMatrixData_ = nullptr;
   Type *blockData_ = nullptr;
   Type *dupBlockData_ = nullptr;
@@ -150,16 +151,21 @@ class MatrixBlockData {
 
   //comm methods for this block
   void initializeComm() {comm.initializeComm();}
-  void finalizeComm() {comm.finalizeComm();}
+  int finalizeComm() {return comm.finalizeComm();}
   void destroyComm() {
 	  memcpy(blockData_, dupBlockData_ , blockSizeHeight_*blockSizeWidth_*sizeof(Type)); //restore original block data. Avoid 1 comm
 	  comm.destroyComm();
   }
-  void setupCommPackage(int alignMat=0) {comm.setupCommPackage(blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_, alignMat);}
+  void setupCommPackage(int numBlocksRows, int numBlocksCols, int alignMat=0) {
+	  comm.setupCommPackage(numBlocksRows, numBlocksCols, blockData_, blockSizeWidth_, leadingDimension_, rowIdx_, colIdx_, alignMat);
+  }
   void finalizeSetupComm(int alignMat=0){
 	  if(alignMat)
 		  comm.finalizeAlign();
   }
+  size_t cannonIteration() {return cannonIteration_;}
+  void cannonIteration(size_t val) {cannonIteration_ = val;}
+  void incCannonIteration(){cannonIteration_++;}
 
   friend std::ostream &operator<<(std::ostream &os, MatrixBlockData const &data) {
     os << "MatrixBlockData " << Id << " position Grid: (" << data.rowIdx_ << ", " << data.colIdx_ << ")" << std::endl;

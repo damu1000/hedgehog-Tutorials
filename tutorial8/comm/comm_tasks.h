@@ -22,17 +22,21 @@
 #include "comm.h"
 #include <hedgehog/hedgehog.h>
 #include "../data/matrix_block_data.h"
-
-
+#include "../data/cuda_matrix_block_data.h"
+#include <atomic>
 
 //setup comm task
 template<class Type, char Id, Order Ord = Order::Column, class MBD = MatrixBlockData<Type, Id, Ord>>
 class commSetupTask : public hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>> {
 public:
 	int setupComm{1};
+	int numBlocksRows{0};
+	int numBlocksCols{0};
 
-	commSetupTask(int setupComm_=1) : hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>>("commSetup") {
+	commSetupTask(int numBlocksRows_, int numBlocksCols_, int setupComm_=1) : hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>>("commSetup") {
 		setupComm = setupComm_;
+		numBlocksRows = numBlocksRows_;
+		numBlocksCols = numBlocksCols_;
 	}
 
 	void execute(std::shared_ptr<std::vector<std::shared_ptr<MBD>>> matBlocksVec) override {
@@ -40,7 +44,7 @@ public:
 		auto matBlocks = *matBlocksVec;
 
 		for(auto &mb: matBlocks)
-			mb->setupCommPackage(setupComm);
+			mb->setupCommPackage(numBlocksRows, numBlocksCols, setupComm);
 
 		for(auto &mb: matBlocks){
 			mb->finalizeSetupComm(setupComm);
@@ -49,7 +53,7 @@ public:
 	}
 
 	std::shared_ptr<hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>>> copy() override {
-		return std::make_shared<commSetupTask<Type, Id, Ord>>();
+		return std::make_shared<commSetupTask<Type, Id, Ord>>(numBlocksRows, numBlocksCols, setupComm);
 	}
 };
 
@@ -72,50 +76,71 @@ public:
 	}
 };
 
-
-
-//needs A / B from init task. Just save A / B passed on by init.
-//Second input is partial matrix p from product Task. Decrement ttl for every input from productTask. Finalize comm when ttl reaches 0
+/*
+  Finalize comm task:
+  Output: MBD for a/b: overwrites the incoming MBD from input 1 with the latest value from MPI buffer
+  Input1: MBD from Init comm task. This gets overwritten in finalize method after MPI comm is completed
+  Input2: CudaMatrixBlockData for a.
+  Input3: CudaMatrixBlockData for b.
+  	  	  The input 2 and 3 objects (CudaMatrixBlockData) themselves are not used, these are just used as signal to indicate that the block is copied from host to device
+  	  	  and the host memory can be overwritten.
+  	  	  However wait until all blocks of and b are copied to device before starting MPI finalize to avoid pushing of new blocks ahead of old ones.
+  	  	  Achieved by usedBlocks logic.
+  */
 template<class Type, char Id, Order Ord = Order::Column, class MBD = MatrixBlockData<Type, Id, Ord>>
-class commFinalizeTask : public hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>> {
+class commFinalizeTask : public hh::AbstractTask<MBD, MBD, CudaMatrixBlockData<Type, 'a'>, CudaMatrixBlockData<Type, 'b'>> {
 public:
-	//call finalizeComm only when ttl (time to live) reaches 0.
-	//ttl should be nBlocks*mBlocks*pBlocks i.e., num of blocks calculated locally. Restore ttl after each Cannon's iteration.
-	//Do not multiply by q, because counter needs to reach 0 for every iteration to call finalizeComm routine. If multiplied by q, ttl will never reach 0.
-	int ttl, ttlCopy, rows, cols;
+
+	int rows, cols;
+	std::atomic<int> usedBlocks{0};
 	std::vector<std::shared_ptr<MBD>> matBlock;
 
-	//TODO: rethink about ttl logic. no need to wait for the entire c to be computed before finalizing comm for all blocks at once
-	//can it be done based on rolling basis? use indexes of matrix c to finalize comm of A and B with corresponding row and col ???
-	commFinalizeTask(int _rows, int _cols, int _ttl) : hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>>("commFinalize") {
-		ttl = _ttl;
-		ttlCopy = ttl;
+	commFinalizeTask(int _rows, int _cols) : hh::AbstractTask<MBD, MBD, CudaMatrixBlockData<Type, 'a'>, CudaMatrixBlockData<Type, 'b'>>("commFinalize") {
 		rows = _rows;
 		cols = _cols;
+		usedBlocks = 2 * rows * cols; //multiply by 2 because consider both matrices A and B
 		matBlock = std::vector<std::shared_ptr<MBD>> (rows*cols, nullptr);
 	}
 
-	void execute(std::shared_ptr<MBD> _matBlock) override {
+	void execute(std::shared_ptr<MBD> _matBlock) override { //from InitComm. store the matrix in matBlock array to be used in the future. This SHOULD be always called before other executes due to linear dependency
 		matBlock[_matBlock->rowIdx() * cols + _matBlock->colIdx()] = _matBlock;
 	}
 
-	void execute(std::shared_ptr<MatrixBlockData<Type, 'c', Ord>> partialResult) override {//partialResult is unused here, but it ensures product is completed
-		ttl--;
-		if(ttl==0){
-			ttl = ttlCopy; //restore for the next Cannon's iteration
-			for(auto &m : matBlock){
-				if(m){
-					m->finalizeComm();
-					this->addResult(m); //push result
+	void execute(std::shared_ptr<CudaMatrixBlockData<Type, 'a'>> partialResult) override {
+		finalize();
+	}
+
+	void execute(std::shared_ptr<CudaMatrixBlockData<Type, 'b'>> partialResult) override {
+		finalize();
+	}
+
+	void finalize() {//partialResult is unused here, but it ensures product is completed
+		usedBlocks--; //decrement the number of A and B blocks used
+		if(usedBlocks == 0){ //finalize the comm when ALL A and B blocks are used
+			usedBlocks = 2 * rows * cols; //restore for the next iteration
+
+			int pending;
+			do{ //run until at least one block is pending
+				pending = 0;
+				for(auto &m : matBlock){ //iterate over blocks
+					if(m){
+						if(m->finalizeComm()){ //if comm completed. finalizeComm should ideally use MPI_Testall to check, but causes some race condition. So using MPI_waitall as of now. Check finalizeComm method in comm.h
+							m->incCannonIteration(); //increment Cannon iteration for the new block
+							this->addResult(m); //push result
+							m = nullptr;
+						}
+						else
+							pending++;
+					}
 				}
-			}
+			}while(pending > 0);
+
 		}
 	}
 
-	std::shared_ptr<hh::AbstractTask<MBD, MBD, MatrixBlockData<Type, 'c', Ord>>> copy() override {
-		return std::make_shared<commFinalizeTask>(this->rows, this->cols, this->ttl);
+	std::shared_ptr<hh::AbstractTask<MBD, MBD, CudaMatrixBlockData<Type, 'a'>, CudaMatrixBlockData<Type, 'b'>>> copy() override {
+		return std::make_shared<commFinalizeTask>(this->rows, this->cols);
 	}
 };
-
 
 #endif

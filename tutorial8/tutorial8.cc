@@ -35,6 +35,7 @@
 #include "cuda_tasks/cuda_copy_in_gpu.h"
 #include "cuda_tasks/cuda_copy_out_gpu.h"
 #include "cuda_tasks/cuda_product_task.h"
+#include "cuda_tasks/cuda_addition_task.h"
 
 #include "state/cannon_state.h"
 #include "state/cannon_state_manager.h"
@@ -46,6 +47,10 @@
 
 using MatrixType = double;
 constexpr Order Ord = Order::Column;
+
+cudaStream_t *cudaStreams::streams = nullptr;
+size_t cudaStreams::n = 0;
+size_t cudaStreams::p = 0;
 
 
 class SizeConstraint : public TCLAP::Constraint<size_t> {
@@ -202,8 +207,8 @@ void matMult(double *A, double *B, double *C, int n, int q)
 {
 	CommPackage<double, 'a'> cpackA; //create and init comm packages for matrices A and B.
 	CommPackage<double, 'b'> cpackB;
-	cpackA.setupCommPackage(A, n, n, 0, 0, 1); //patch is not divided into blocks. So the blockSize = leading dimension = n and rowId=colId =0
-	cpackB.setupCommPackage(B, n, n, 0, 0, 1);
+	cpackA.setupCommPackage(1, 1, A, n, n, 0, 0, 1); //patch is not divided into blocks. So the blockSize = leading dimension = n and rowId=colId =0
+	cpackB.setupCommPackage(1, 1, B, n, n, 0, 0, 1);
 	cpackA.finalizeAlign();
 	cpackB.finalizeAlign();
 
@@ -227,7 +232,28 @@ void matMult(double *A, double *B, double *C, int n, int q)
 }
 
 
+MatrixType *devC = nullptr;
 
+
+std::shared_ptr<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>>>
+asyncCopyInC(std::shared_ptr<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>>> &matC, size_t blockSize){
+	std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>> cudMatC;
+	auto C = (*matC);
+
+	size_t size = C.size() * blockSize * blockSize * sizeof(MatrixType);
+	checkCudaErrors(cudaMalloc(&devC, size));
+
+	for(size_t i=0; i<C.size(); i++){
+		MatrixBlockData<MatrixType, 'c', Order::Column> x(*(C[i])); //copy the object, replace the pointer with device pointer
+		x.blockData(devC + i*blockSize*blockSize);
+		x.fullMatrixData(nullptr);
+		auto stream = cudaStreams::getStream(x.rowIdx(), x.colIdx()); //use the stream corresponding to C's block. Same stream will be used for addition and copyout. avoids explicit synchronization
+		checkCudaErrors(cudaMemcpyAsync(x.blockData(), C[i]->blockData(), blockSize * blockSize * sizeof(MatrixType), cudaMemcpyHostToDevice, stream));
+
+		cudMatC.push_back(std::make_shared<MatrixBlockData<MatrixType, 'c', Order::Column>>(x));
+	}
+	return std::make_shared<std::vector<std::shared_ptr<MatrixBlockData<MatrixType, 'c', Order::Column>>>>(cudMatC);
+}
 
 //----------------------------------------- Cannon's Algorithm. with HH. -----------------------------------------
 
@@ -242,6 +268,9 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	size_t mBlocks = std::ceil(m / blockSize) + (m % blockSize == 0 ? 0 : 1);
 	size_t pBlocks = std::ceil(p / blockSize) + (p % blockSize == 0 ? 0 : 1);
 
+	cudaStreams::createStreams(nBlocks, pBlocks);
+	auto dMatC = asyncCopyInC(matC, blockSize); //initiate one time h2d copy for c using respective stream
+
 	// Graph
 	auto matrixMultiplicationGraph =
 			hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>, //output of graph
@@ -251,23 +280,25 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 			("Matrix Multiplication Graph");
 
 	// Host Tasks
-	auto taskCommSetupA = std::make_shared<commSetupTask<MatrixType, 'a', Ord>>(1);
-	auto taskCommSetupB = std::make_shared<commSetupTask<MatrixType, 'b', Ord>>(1);
-	auto taskCommSetupC = std::make_shared<commSetupTask<MatrixType, 'c', Ord>>(0); // do not setup comm, just push the blocks
-	auto additionTask = std::make_shared<AdditionTask<MatrixType, Ord>>(numberThreadAddition);
+	auto taskCommSetupA = std::make_shared<commSetupTask<MatrixType, 'a', Ord>>(nBlocks, mBlocks, 1);
+	auto taskCommSetupB = std::make_shared<commSetupTask<MatrixType, 'b', Ord>>(mBlocks, pBlocks, 1);
+//	auto taskCommSetupC = std::make_shared<commSetupTask<MatrixType, 'c', Ord>>(nBlocks, pBlocks, 0); // do not setup comm, just push the blocks
+//	auto additionTask = std::make_shared<AdditionTask<MatrixType, Ord>>(numberThreadAddition);
 
 	// comm tasks
 	auto taskCommInitA = std::make_shared<commInitTask<MatrixType, 'a', Ord>>();
 	auto taskCommInitB = std::make_shared<commInitTask<MatrixType, 'b', Ord>>();
-	auto taskCommFinalizeA = std::make_shared<commFinalizeTask<MatrixType, 'a', Ord>>(nBlocks, mBlocks, nBlocks * mBlocks * pBlocks);
-	auto taskCommFinalizeB = std::make_shared<commFinalizeTask<MatrixType, 'b', Ord>>(mBlocks, pBlocks, nBlocks * mBlocks * pBlocks);
+	auto taskCommFinalizeA = std::make_shared<commFinalizeTask<MatrixType, 'a', Ord>>(nBlocks, mBlocks);
+	auto taskCommFinalizeB = std::make_shared<commFinalizeTask<MatrixType, 'b', Ord>>(mBlocks, pBlocks);
 
 	// Cuda tasks
 	// Tasks
 	auto copyInATask = std::make_shared<CudaCopyInGpu<MatrixType, 'a'>>(pBlocks, blockSize, n, nBlocks * mBlocks);
 	auto copyInBTask = std::make_shared<CudaCopyInGpu<MatrixType, 'b'>>(nBlocks, blockSize, m, mBlocks * pBlocks);
 	auto productTask = std::make_shared<CudaProductTask<MatrixType>>(p, numberThreadProduct);
-	auto copyOutTask = std::make_shared<CudaCopyOutGpu<MatrixType>>(blockSize, nBlocks * mBlocks * pBlocks);
+//	auto copyOutTask = std::make_shared<CudaCopyOutGpu<MatrixType>>(blockSize, nBlocks * mBlocks * pBlocks);
+	auto cuAdditionTask = std::make_shared<CudaAdditionTask<MatrixType>>(nBlocks, mBlocks, pBlocks, q, dMatC ); //pass device block array
+	auto copyOutTaskC = std::make_shared<CudaCopyOutGpuC<MatrixType>>(nBlocks, mBlocks, pBlocks, matC); //pass host block array
 
 	// MemoryManagers
 	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 16, blockSize);
@@ -281,8 +312,8 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 
 	// State
 	auto stateInputBlock = std::make_shared<CudaInputBlockState<MatrixType>>(nBlocks, mBlocks, pBlocks);
-	auto statePartialComputation = std::make_shared<PartialComputationState<MatrixType, Ord>>(nBlocks, pBlocks, nBlocks * mBlocks * pBlocks, q);
-	auto stateOutput = std::make_shared<OutputState<MatrixType, Ord>>(nBlocks, pBlocks, mBlocks, q);
+//	auto statePartialComputation = std::make_shared<PartialComputationState<MatrixType, Ord>>(nBlocks, pBlocks, nBlocks * mBlocks * pBlocks, q);
+//	auto stateOutput = std::make_shared<OutputState<MatrixType, Ord>>(nBlocks, pBlocks, mBlocks, q);
 
 	//comm states
 	auto stateCannonA = std::make_shared<CannonState<MatrixType, 'a', Ord>>(nBlocks*mBlocks, q); //output state to carry out loops of Cannon's algorithm
@@ -297,12 +328,12 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 			CudaMatrixBlockData<MatrixType, 'a'>, CudaMatrixBlockData<MatrixType, 'b'>>
 			>("Input State Manager", stateInputBlock);
 
-	auto stateManagerPartialComputation = std::make_shared<PartialComputationStateManager<MatrixType, Ord>>(statePartialComputation);
+//	auto stateManagerPartialComputation = std::make_shared<PartialComputationStateManager<MatrixType, Ord>>(statePartialComputation);
 
-	auto stateManagerOutputBlock =
-			std::make_shared<hh::StateManager<
-			MatrixBlockData<MatrixType, 'c', Ord>,
-			MatrixBlockData<MatrixType, 'c', Ord>>>("Output State Manager", stateOutput);
+//	auto stateManagerOutputBlock =
+//			std::make_shared<hh::StateManager<
+//			MatrixBlockData<MatrixType, 'c', Ord>,
+//			MatrixBlockData<MatrixType, 'c', Ord>>>("Output State Manager", stateOutput);
 
 	//output state manager to carry out loops of Cannon's algorithm
 	auto stateManagerCannonA = std::make_shared<CannonStateManager<MatrixType, 'a', Ord>>(stateCannonA);
@@ -311,7 +342,7 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// Build the graph
 	matrixMultiplicationGraph.input(taskCommSetupA);
 	matrixMultiplicationGraph.input(taskCommSetupB);
-	matrixMultiplicationGraph.input(taskCommSetupC);
+//	matrixMultiplicationGraph.input(taskCommSetupC);
 
 	matrixMultiplicationGraph.addEdge(taskCommSetupA, taskCommInitA);          //1. pass A / B to init. init will call MPI send-recv for these blocks
 	matrixMultiplicationGraph.addEdge(taskCommSetupB, taskCommInitB);
@@ -327,28 +358,34 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	matrixMultiplicationGraph.addEdge(copyInATask, stateManagerInputBlock);
 	matrixMultiplicationGraph.addEdge(copyInBTask, stateManagerInputBlock);
 
+	matrixMultiplicationGraph.addEdge(copyInATask, taskCommFinalizeA);        //4. Pass on matmult result to finalize. Actual finalization happens only when ALL blocks are computed. Avoids premature update of A/B.
+	matrixMultiplicationGraph.addEdge(copyInBTask, taskCommFinalizeA);        //4. Pass on matmult result to finalize. Actual finalization happens only when ALL blocks are computed. Avoids premature update of A/B.
+	matrixMultiplicationGraph.addEdge(copyInATask, taskCommFinalizeB);
+	matrixMultiplicationGraph.addEdge(copyInBTask, taskCommFinalizeB);
+
 	// Do the CUDA product task
 	matrixMultiplicationGraph.addEdge(stateManagerInputBlock, productTask);
+	matrixMultiplicationGraph.addEdge(productTask, cuAdditionTask);
+	matrixMultiplicationGraph.addEdge(cuAdditionTask, copyOutTaskC);
 
 	// Copy out the temporary block to the CPU for accumulation after the product
-	matrixMultiplicationGraph.addEdge(productTask, copyOutTask);
-	matrixMultiplicationGraph.addEdge(copyOutTask, stateManagerPartialComputation);
+//	matrixMultiplicationGraph.addEdge(productTask, copyOutTask);
+//	matrixMultiplicationGraph.addEdge(copyOutTask, stateManagerPartialComputation);
+//
+//	// Use the same graph for the accumulation
+//	matrixMultiplicationGraph.addEdge(taskCommSetupC, stateManagerPartialComputation);
+//	matrixMultiplicationGraph.addEdge(stateManagerPartialComputation, additionTask);
+//	matrixMultiplicationGraph.addEdge(additionTask, stateManagerPartialComputation);
+//	matrixMultiplicationGraph.addEdge(additionTask, stateManagerOutputBlock);
 
-	// Use the same graph for the accumulation
-	matrixMultiplicationGraph.addEdge(taskCommSetupC, stateManagerPartialComputation);
-	matrixMultiplicationGraph.addEdge(stateManagerPartialComputation, additionTask);
-	matrixMultiplicationGraph.addEdge(additionTask, stateManagerPartialComputation);
-	matrixMultiplicationGraph.addEdge(additionTask, stateManagerOutputBlock);
-
-	matrixMultiplicationGraph.addEdge(additionTask, taskCommFinalizeA);        //4. Pass on matmult result to finalize. Actual finalization happens only when ALL blocks are computed. Avoids premature update of A/B.
-	matrixMultiplicationGraph.addEdge(additionTask, taskCommFinalizeB);
 
 	matrixMultiplicationGraph.addEdge(taskCommFinalizeA, stateManagerCannonA); //5. Cannon state checks if q iterations are over.
 	matrixMultiplicationGraph.addEdge(taskCommFinalizeB, stateManagerCannonB);
 	matrixMultiplicationGraph.addEdge(stateManagerCannonA, taskCommInitA);     //6. Push updated A/B blocks to init (step 1.)
 	matrixMultiplicationGraph.addEdge(stateManagerCannonB, taskCommInitB);
 
-	matrixMultiplicationGraph.output(stateManagerOutputBlock);
+//	matrixMultiplicationGraph.output(stateManagerOutputBlock);
+	matrixMultiplicationGraph.output(copyOutTaskC);
 
 	// Execute the graph
 	matrixMultiplicationGraph.executeGraph();
@@ -356,7 +393,7 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// Push the matrices
 	matrixMultiplicationGraph.pushData(matA);
 	matrixMultiplicationGraph.pushData(matB);
-	matrixMultiplicationGraph.pushData(matC);
+//	matrixMultiplicationGraph.pushData(matC);
 
 	// Notify push done
 	matrixMultiplicationGraph.finishPushingData();

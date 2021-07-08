@@ -14,7 +14,7 @@
 #define ALONG_ROWS 1
 #define ALONG_COLS 0
 
-//#define OVERLAP_COMM
+#define OVERLAP_COMM
 
 double g_commTime{0}, g_setupTime{0};
 
@@ -43,7 +43,12 @@ public:
 	int rank{0}, src{0}, dest{0}; //self rank, source and destination ranks for this particular block
 	int n{0}, q{0}, leadingDimension{0};  //n is block size, q is sqrt(num of ranks), and leadingDimension is num of columns in local matrix patch.
 	int tag{0}; //tag to be used for mpi comm;
+	int tagoffset{0};
+	int iteration{0};
+	int numBlocksRows{0};
+	int numBlocksCols{0};
 	//struct timeval  tv1, tv2;
+	int rowIdx{0}, colIdx{0};
 
 	CommPackage() = default;
 
@@ -62,14 +67,18 @@ public:
 	}
 
 	//this must be called before calling init and finalize comm
-	void setupCommPackage(MatrixType *_data, int _n, int _leadingDimension, int _rowIdx, int _colIdx, int alignMat=0) //n and _n is blocksize.
+	void setupCommPackage(int numBlocksRows_, int numBlocksCols_, MatrixType *_data, int _n, int _leadingDimension, int _rowIdx, int _colIdx, int alignMat=0) //n and _n is blocksize.
 	{
 		if(Id != 'a' && Id != 'b') return; // no need to init for ids other than a and b
-
+		rowIdx = _rowIdx;
+		colIdx = _colIdx;
+		numBlocksRows = numBlocksRows_;
+		numBlocksCols = numBlocksCols_;
 		data = _data;
 		n = _n;
 		leadingDimension = _leadingDimension;
-		tag = _rowIdx * (leadingDimension / n) + _colIdx; //this is basically the position of the block in the local patch. This will give unique tags to each block. leadingDimension / n gives num of blocks along x dimension
+		tagoffset = numBlocksRows * numBlocksCols * 2 ;//tags in one iteration. increment tag value in the next iteration by this offset to avoid conflict between iterations
+		tag = _rowIdx * numBlocksCols + _colIdx; //this is basically the position of the block in the local patch. This will give unique tags to each block. leadingDimension / n gives num of blocks along x dimension
 		tag = 2*tag + (Id == 'a' ? 0 : 1);
 		int size;
 		MPI_Comm_rank(comm, &rank);
@@ -154,13 +163,22 @@ public:
 		//cout << rank << " " << " source A: " << src_A <<  " des A: " <<dest_A << " source B: " << src_B <<  " des B: " <<dest_B << "\n";
 	}
 
-	void finalizeComm() //wait for async comm to be over and copy values from buffer to the variable.
+	//return true if finalize comm is successful.
+	int finalizeComm() //wait for async comm to be over and copy values from buffer to the variable.
 	{
 		assert(Id == 'a' || Id == 'b');
+
 #ifdef OVERLAP_COMM
 		//printf("waiting for comm\n");
 		//gettimeofday(&tv1, NULL);
 		MPI_Waitall(2, reqs, stats);	//wait for all transfers to complete
+
+		//ideally test all logic should work instead of wait_all, but shows race conditions. Because of out of order offload to GPU in subsequent tasks??
+		//hopefully should not make so much difference considering early finalize comm call as soon as copy ins of all blocks is completed.
+//		int flag=0;
+//		MPI_Testall(2, reqs, &flag, stats);
+//		if(flag == false) return flag;
+
 		//gettimeofday(&tv2, NULL);
 		//double seconds = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
 		//g_commTime += seconds;
@@ -169,10 +187,15 @@ public:
 		//copy received A and B from recieved buffer to A and B
 		copyBuffer(data, leadingDimension, recvbuff, n, n);
 
+		tag += tagoffset;
+		iteration++;
+
 		//data received in this iteration is forwarded. Hence swapping send and recv buffer pointers rather than copying data
 		MatrixType *temp = sendbuff;
 		sendbuff = recvbuff;
 		recvbuff = temp;
+
+		return true;
 	}
 
 	void destroyComm()//(int alignMat=0)

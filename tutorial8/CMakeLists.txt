@@ -1,3 +1,9 @@
+cuda_add_library(vectorAdd SHARED
+        vectorAdd.cu
+        OPTIONS -arch sm_70 -O3 -g
+)
+
+
 add_executable(tutorial8_distribute_dgemm
 		tutorial8.cc
 
@@ -30,7 +36,8 @@ target_compile_definitions(tutorial8_distribute_dgemm PUBLIC
 target_link_libraries(tutorial8_distribute_dgemm
 		${Hedgehog_LIBRARIES}
 		${CUDA_LIBRARIES}
-		cuda)
+		cuda
+		vectorAdd)
 
 target_include_directories(tutorial8_distribute_dgemm PUBLIC
 		${Hedgehog_INCLUDE_DIR}
