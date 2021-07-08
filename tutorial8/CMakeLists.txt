@@ -13,17 +13,13 @@ add_executable(tutorial8_distribute_dgemm
 		data/cuda_matrix_block_data.h
 
 		state/cuda_input_block_state.h
-		state/output_state.h
-		state/partial_computation_state.h
-		state/partial_computation_state_manager.h
 
 		cuda_tasks/cuda_copy_in_gpu.h
 		cuda_tasks/cuda_copy_out_gpu.h
 		cuda_tasks/cuda_product_task.h
-
-		task/addition_task.h
-		task/matrix_row_traversal_task.h
-		task/matrix_column_traversal_task.h
+		cuda_tasks/cuda_addition_task.h
+		cuda_tasks/cuda_addition_task.h
+		cuda_tasks/cuda_streams.h
 
 		utils/cuda_utils.h
 

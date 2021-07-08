@@ -102,14 +102,6 @@ class CudaCopyOutGpu
 };
 
 
-
-
-extern "C"{
-void vectorAdd(double *dest, double *src, size_t n, cudaStream_t stream);
-void vectorPrint(double *v, size_t n, cudaStream_t stream);
-}
-
-
 template<class MatrixType>
 class CudaCopyOutGpuC
     : public hh::AbstractCUDATask<MatrixBlockData<MatrixType, 'c', Order::Column>, //output to output state (or graph out put itself ??)
@@ -162,9 +154,6 @@ class CudaCopyOutGpuC
 	  checkCudaErrors(cudaPointerGetAttributes ( &att, dC->blockData()));
 
 	  size_t size = dC->blockSizeHeight() * dC->blockSizeWidth() * sizeof(MatrixType);
-
-//	  vectorPrint(dC->blockData(), dC->blockSizeHeight() * dC->blockSizeWidth(), stream);
-//	  checkCudaErrors(cudaStreamSynchronize(stream));
 
 	  checkCudaErrors(cudaMemcpyAsync(hC->blockData(), dC->blockData(), size, cudaMemcpyDeviceToHost, stream));
 
