@@ -22,27 +22,39 @@
 
 #include <cuda_runtime_api.h>
 #include <hedgehog/hedgehog.h>
+#include <cuda.h>
+#include <cublas.h>
 
 //create 2d grid of cuda streams for matrix c. One cuda stream for evry block in c.
 struct cudaStreams{
   static cudaStream_t *streams;
+  static cublasHandle_t *cublas_handles;
   static size_t n, p;
 
   static void createStreams(size_t n_, size_t p_){
 	  n = n_;
 	  p = p_;
       streams = new cudaStream_t[n*p];
-      for(size_t i=0; i<n*p; i++)
+      cublas_handles = new cublasHandle_t[n*p];
+
+      for(size_t i=0; i<n*p; i++){
     	  checkCudaErrors(cudaStreamCreate(&streams[i]));
+		  checkCudaErrors(cublasCreate_v2(&cublas_handles[i]));
+		  checkCudaErrors(cublasSetStream_v2(cublas_handles[i], streams[i]));
+      }
   }
 
   static void destroyStreams(){
-	  for(size_t i=0; i<n*p; i++)
+	  for(size_t i=0; i<n*p; i++){
+		  checkCudaErrors(cublasDestroy_v2(cublas_handles[i]));
 		  checkCudaErrors(cudaStreamDestroy(streams[i]));
+	  }
       delete []streams;
+      delete []cublas_handles;
   }
 
   static cudaStream_t getStream(size_t r, size_t c) { return streams[r*p + c]; }
+  static cublasHandle_t getCublasHandle(size_t r, size_t c) { return cublas_handles[r*p + c]; }
 };
 
 

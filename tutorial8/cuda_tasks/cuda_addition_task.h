@@ -67,30 +67,20 @@ class CudaAdditionTask : public hh::AbstractCUDATask<
 
   void shutdownCuda() override {}
 
-  static void returnP(void *data){
-	  CudaMatrixBlockData<Type, 'p'> * P = reinterpret_cast<CudaMatrixBlockData<Type, 'p'> *> (data);
-	  P->returnToMemoryManager();
-  }
-
   void execute(std::shared_ptr<CudaMatrixBlockData<Type, 'p'>> P) override {
 
     auto C = (*(matC))[P->colIdx() * nBlocks + P->rowIdx()]; //column major order hence matP->colIdx() * nblocks + matP->rowIdx(). Is it correct?
 
-    assert(C->rowIdx() == P->rowIdx() && C->colIdx() == P->colIdx());
+    //assert(C->rowIdx() == P->rowIdx() && C->colIdx() == P->colIdx());
 
     //call the kernel to add c and p
     auto stream = cudaStreams::getStream(P->rowIdx(), P->colIdx());
     vectorAdd(C->blockData(), P->blockData(), C->blockSizeHeight() * C->blockSizeWidth(), stream);
-    //vectorPrint(C->blockData(), C->blockSizeHeight() * C->blockSizeWidth(), stream);
-    //use events to call returnToMemoryManager. Can call back be used effectively ?
-    checkCudaErrors(cudaStreamSynchronize(stream));
-    P->returnToMemoryManager();
 
-//    cudaPointerAttributes att;
-//    checkCudaErrors(cudaPointerGetAttributes ( &att, C->blockData()));
+    //return A and B blocks to memory manager asynchronously.
+    CudaMatrixBlockData<Type, 'p'>::returnCudaBlock(P, stream);
 
-//    checkCudaErrors(cudaLaunchHostFunc(stream, returnP, (void*)(P.get())));
-
+    //check ttl and push the result only if all additions are completed for that block of C.
     ttl[P->colIdx() * nBlocks + P->rowIdx()]--;
     if(ttl[P->colIdx() * nBlocks + P->rowIdx()] == 0)
     	this->addResult(C);

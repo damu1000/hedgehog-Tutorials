@@ -157,8 +157,6 @@ class CudaCopyOutGpuC
 
 	  checkCudaErrors(cudaMemcpyAsync(hC->blockData(), dC->blockData(), size, cudaMemcpyDeviceToHost, stream));
 
-//	  checkCudaErrors(cudaStreamSynchronize(stream));
-
 	  //cudaLaunchHostFunc did not work here, because it can not access "this" to addResult. Have to use events
 	  checkCudaErrors(cudaEventRecord(copyEvent[myid], stream)); //record event and store the block
 

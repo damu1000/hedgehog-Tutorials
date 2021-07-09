@@ -115,6 +115,25 @@ class CudaMatrixBlockData : public MatrixBlockData<Type, Id, Order::Column>,
        << " ttl: " << data.ttl_ << std::endl;
     return os;
   }
+
+
+  //return cudaBlock to memory manager asynchronously. Avoids explicit synchronization while returning a, b and p in product and addition tasks.
+  //TODO: Needs one new and delete for every call. See if its a bottleneck. Allocate one time array if needed
+  static void returnCudaBlock(std::shared_ptr<CudaMatrixBlockData<Type, Id>> P, cudaStream_t stream){
+	    //store the P pointer into buffer and "returnP" will return P to the memory manager.
+	    //cudaLaunchHostFunc will call returnP once the stream finishes execution till this point
+	    std::shared_ptr<CudaMatrixBlockData<Type, Id>> *P_ptr;
+	    P_ptr = new std::shared_ptr<CudaMatrixBlockData<Type, Id>>[1];
+	    *P_ptr = P;
+	    checkCudaErrors(cudaLaunchHostFunc(stream, returnP, (void*)(P_ptr)));
+  }
+
+  static void returnP(void *data){
+	  auto P_ptr = reinterpret_cast<std::shared_ptr<CudaMatrixBlockData<Type, Id>> *> (data);
+	  auto P = *P_ptr;
+	  delete[] P_ptr;
+	  P->returnToMemoryManager();
+  }
 };
 
 #endif //TUTORIAL8_CUDA_MATRIX_BLOCK_DATA_H

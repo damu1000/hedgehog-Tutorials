@@ -31,9 +31,6 @@ class CudaProductTask : public hh::AbstractCUDATask<
  private:
   size_t
       countPartialComputation_ = 0;
- private:
-  cublasHandle_t
-      handle_ = {};
 
  public:
   explicit CudaProductTask(size_t countPartialComputation, size_t numberThreadsProduct = 1)
@@ -43,14 +40,9 @@ class CudaProductTask : public hh::AbstractCUDATask<
   >("CUDA Product Task", numberThreadsProduct, false, false),
         countPartialComputation_(countPartialComputation) {}
 
-  void initializeCuda() override {
-    checkCudaErrors(cublasCreate_v2(&handle_));
-    checkCudaErrors(cublasSetStream_v2(handle_, this->stream()));
-  }
+  void initializeCuda() override { }
 
-  void shutdownCuda() override {
-    checkCudaErrors(cublasDestroy_v2(handle_));
-  }
+  void shutdownCuda() override { }
   void execute(std::shared_ptr<
       std::pair<std::shared_ptr<CudaMatrixBlockData<Type, 'a'>>, std::shared_ptr<CudaMatrixBlockData<Type, 'b'>>
       >> ptr) override {
@@ -68,9 +60,11 @@ class CudaProductTask : public hh::AbstractCUDATask<
     res->leadingDimension(matA->blockSizeHeight());
     res->ttl(1);
 
+    auto cublas_handle = cudaStreams::getCublasHandle(res->rowIdx(), res->colIdx());
+
     if constexpr(std::is_same<Type, float>::value) {
       checkCudaErrors(
-          cublasSgemm_v2(handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+          cublasSgemm_v2(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
                          matA->blockSizeHeight(), matB->blockSizeWidth(), matA->blockSizeWidth(), &alpha,
                          (float *) matA->blockData(), matA->leadingDimension(),
                          (float *) matB->blockData(), matB->leadingDimension(), &beta,
@@ -78,7 +72,7 @@ class CudaProductTask : public hh::AbstractCUDATask<
       );
     } else if (std::is_same<Type, double>::value) {
       checkCudaErrors(
-          cublasDgemm_v2(handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+          cublasDgemm_v2(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
                          matA->blockSizeHeight(), matB->blockSizeWidth(), matA->blockSizeWidth(), &alpha,
                          (double *) matA->blockData(), matA->leadingDimension(),
                          (double *) matB->blockData(), matB->leadingDimension(), &beta,
@@ -88,10 +82,12 @@ class CudaProductTask : public hh::AbstractCUDATask<
       std::cerr << "The matrix can't be multiplied" << std::endl;
       exit(43);
     }
-    checkCudaErrors(cudaStreamSynchronize(this->stream()));
 
-    matA->returnToMemoryManager();
-    matB->returnToMemoryManager();
+    //return A and B blocks to memory manager asynchronously.
+    auto stream = cudaStreams::getStream(res->rowIdx(), res->colIdx());
+    CudaMatrixBlockData<Type, 'a'>::returnCudaBlock(matA, stream);
+    CudaMatrixBlockData<Type, 'b'>::returnCudaBlock(matB, stream);
+
     this->addResult(res);
   }
   std::shared_ptr<hh::AbstractTask<CudaMatrixBlockData<Type, 'p'>,

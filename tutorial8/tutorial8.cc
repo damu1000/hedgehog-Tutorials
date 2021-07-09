@@ -41,6 +41,7 @@ using MatrixType = double;
 constexpr Order Ord = Order::Column;
 
 cudaStream_t *cudaStreams::streams = nullptr;
+cublasHandle_t *cudaStreams::cublas_handles = nullptr;
 size_t cudaStreams::n = 0;
 size_t cudaStreams::p = 0;
 
