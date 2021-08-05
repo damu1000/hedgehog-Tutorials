@@ -151,6 +151,7 @@ class MatrixBlockData {
 
   //comm methods for this block
   void initializeComm() {comm.initializeComm();}
+  void waitForComm() {comm.waitForComm();}
   int finalizeComm() {return comm.finalizeComm();}
   void destroyComm() {
 	  memcpy(blockData_, dupBlockData_ , blockSizeHeight_*blockSizeWidth_*sizeof(Type)); //restore original block data. Avoid 1 comm

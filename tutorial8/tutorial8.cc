@@ -216,6 +216,8 @@ void matMult(double *A, double *B, double *C, int n, int q)
 				for(int l = 0; l<n; l++)
 					C[j*n+i] += A[l*n+i]*B[j*n+l]; //TODO: verify indexing based on the row order or column order
 
+		cpackA.waitForComm();
+		cpackB.waitForComm();
 		cpackA.finalizeComm(); //finalize comm
 		cpackB.finalizeComm();
 	}
@@ -282,8 +284,8 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto taskCommSetupB = std::make_shared<commSetupTask<MatrixType, 'b', Ord>>(mBlocks, pBlocks, 1);
 
 	// comm tasks
-	auto taskCommInitA = std::make_shared<commInitTask<MatrixType, 'a', Ord>>();
-	auto taskCommInitB = std::make_shared<commInitTask<MatrixType, 'b', Ord>>();
+	auto taskCommInitA = std::make_shared<commInitTask<MatrixType, 'a', Ord>>(nBlocks * mBlocks);
+	auto taskCommInitB = std::make_shared<commInitTask<MatrixType, 'b', Ord>>(mBlocks * pBlocks);
 	auto taskCommFinalizeA = std::make_shared<commFinalizeTask<MatrixType, 'a', Ord>>(nBlocks, mBlocks);
 	auto taskCommFinalizeB = std::make_shared<commFinalizeTask<MatrixType, 'b', Ord>>(mBlocks, pBlocks);
 
@@ -298,7 +300,7 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// MemoryManagers
 	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 16, blockSize);
 	auto cudaMemoryManagerB = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'b'>, size_t>>(pBlocks + 16, blockSize);
-	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(32, blockSize);
+	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(16, blockSize);
 
 	// Connect the memory manager
 	productTask->connectMemoryManager(cudaMemoryManagerProduct);
@@ -379,9 +381,9 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	for(auto &blockB: *matB) blockB->destroyComm();
 	destroyCudaC();
 
-//	int rank;
-//	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-//	matrixMultiplicationGraph.createDotFile(std::string("graph_"  + std::to_string(rank) + ".dot"), hh::ColorScheme::NONE, hh::StructureOptions::ALL);
+	int rank;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	matrixMultiplicationGraph.createDotFile(std::string("graph_"  + std::to_string(rank) + ".dot"), hh::ColorScheme::NONE, hh::StructureOptions::ALL);
 
 }
 
@@ -486,13 +488,13 @@ int main(int argc, char **argv)
 
 	}
 	else{//measure performance
-		double seconds = 0, iterations = 10.0;
+		double seconds = 0, iterations = 1.0;
 		struct timeval  tv1, tv2;
 
-		for(int i=0; i<iterations/2; i++){ //warm up
-			//call matrix multiply
-			matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
-		}
+//		for(int i=0; i<iterations/2; i++){ //warm up
+//			call matrix multiply
+//			matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
+//		}
 
 		gettimeofday(&tv1, NULL);
 		for(int i=0; i<iterations; i++){

@@ -6,5 +6,8 @@
 
 export CUDA_VISIBLE_DEVICES=$PMI_RANK
 
-./tutorial8_distribute_dgemm -n $1 -b $2 -x 8 -a 4
+./tutorial8_distribute_dgemm -n $1 -b $2 -x 8 -a 2 
 
+
+
+#use cuda events instead of 

@@ -8,13 +8,15 @@
 #include <sys/time.h>
 #include <stdio.h>
 #include <assert.h>
+#include <atomic>
+#include <string.h>
 
 #include "../data/data_type.h"
 
 #define ALONG_ROWS 1
 #define ALONG_COLS 0
 
-#define OVERLAP_COMM
+//#define OVERLAP_COMM
 
 double g_commTime{0}, g_setupTime{0};
 
@@ -49,22 +51,27 @@ public:
 	int numBlocksCols{0};
 	//struct timeval  tv1, tv2;
 	int rowIdx{0}, colIdx{0};
+	std::atomic<bool> commcompleted{false};
 
 	CommPackage() = default;
 
 	void copyBuffer(MatrixType *dest, int destLeadingDim, MatrixType *src, int srcLeadingDim, int n){
-		//TODO: Ideally order should not make difference in copying block into the buffer. Try it
-		if(Ord == Order::Row){
-			for(int i = 0; i<n; i++) //copy values into send buffer for the first send
-				for(int j = 0; j<n; j++)
-					dest[i * destLeadingDim + j] = src[i * srcLeadingDim + j];
-		}
-		else{
-			for(int i = 0; i<n; i++) //copy values into send buffer for the first send
-				for(int j = 0; j<n; j++)
-					dest[j * destLeadingDim + i] = src[j * srcLeadingDim + i];
-		}
+		assert(destLeadingDim == srcLeadingDim);
+		memcpy(dest, src, n*n*sizeof(MatrixType));
 	}
+//	void copyBuffer(MatrixType *dest, int destLeadingDim, MatrixType *src, int srcLeadingDim, int n){
+//		//TODO: Ideally order should not make difference in copying block into the buffer. Try it
+//		if(Ord == Order::Row){
+//			for(int i = 0; i<n; i++) //copy values into send buffer for the first send
+//				for(int j = 0; j<n; j++)
+//					dest[i * destLeadingDim + j] = src[i * srcLeadingDim + j];
+//		}
+//		else{
+//			for(int i = 0; i<n; i++) //copy values into send buffer for the first send
+//				for(int j = 0; j<n; j++)
+//					dest[j * destLeadingDim + i] = src[j * srcLeadingDim + i];
+//		}
+//	}
 
 	//this must be called before calling init and finalize comm
 	void setupCommPackage(int numBlocksRows_, int numBlocksCols_, MatrixType *_data, int _n, int _leadingDimension, int _rowIdx, int _colIdx, int alignMat=0) //n and _n is blocksize.
@@ -152,10 +159,10 @@ public:
 		//gettimeofday(&tv1, NULL);
 		MPI_Isend(sendbuff, n*n*sizeof(MatrixType), MPI_BYTE, dest, tag, comm, &reqs[0]);	//send
 		MPI_Irecv(recvbuff, n*n*sizeof(MatrixType), MPI_BYTE, src, tag, comm, &reqs[1]);	//receive
-
-#ifndef OVERLAP_COMM
-		MPI_Waitall(2, reqs, stats);	//wait for all transfers to complete
-#endif
+		commcompleted = false;
+//#ifndef OVERLAP_COMM
+//		MPI_Waitall(2, reqs, stats);	//wait for all transfers to complete
+//#endif
 
 		//gettimeofday(&tv2, NULL);
 		//double seconds = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
@@ -163,26 +170,35 @@ public:
 		//cout << rank << " " << " source A: " << src_A <<  " des A: " <<dest_A << " source B: " << src_B <<  " des B: " <<dest_B << "\n";
 	}
 
+	void waitForComm(){
+		MPI_Waitall(2, reqs, stats);
+		commcompleted = true;
+	}
+
 	//return true if finalize comm is successful.
 	int finalizeComm() //wait for async comm to be over and copy values from buffer to the variable.
 	{
 		assert(Id == 'a' || Id == 'b');
 
-#ifdef OVERLAP_COMM
-		//printf("waiting for comm\n");
-		//gettimeofday(&tv1, NULL);
-		MPI_Waitall(2, reqs, stats);	//wait for all transfers to complete
+		while(commcompleted == false); //wait until comm is completed
 
-		//ideally test all logic should work instead of wait_all, but shows race conditions. Because of out of order offload to GPU in subsequent tasks??
-		//hopefully should not make so much difference considering early finalize comm call as soon as copy ins of all blocks is completed.
-//		int flag=0;
-//		MPI_Testall(2, reqs, &flag, stats);
-//		if(flag == false) return flag;
+		commcompleted = false;
 
-		//gettimeofday(&tv2, NULL);
-		//double seconds = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
-		//g_commTime += seconds;
-#endif
+//#ifdef OVERLAP_COMM
+//		//printf("waiting for comm\n");
+//		//gettimeofday(&tv1, NULL);
+//		MPI_Waitall(2, reqs, stats);	//wait for all transfers to complete
+//
+//		//ideally test all logic should work instead of wait_all, but shows race conditions. Because of out of order offload to GPU in subsequent tasks??
+//		//hopefully should not make so much difference considering early finalize comm call as soon as copy ins of all blocks is completed.
+////		int flag=0;
+////		MPI_Testall(2, reqs, &flag, stats);
+////		if(flag == false) return flag;
+//
+//		//gettimeofday(&tv2, NULL);
+//		//double seconds = (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
+//		//g_commTime += seconds;
+//#endif
 
 		//copy received A and B from recieved buffer to A and B
 		copyBuffer(data, leadingDimension, recvbuff, n, n);

@@ -63,16 +63,29 @@ public:
 template<class Type, char Id, Order Ord = Order::Column, class MBD = MatrixBlockData<Type, Id, Ord>>
 class commInitTask : public hh::AbstractTask<MBD, MBD> {
 public:
-	commInitTask() : hh::AbstractTask<MBD, MBD>("commInit") {}
+	size_t num_blocks{0};
+
+	std::vector<std::shared_ptr<MBD>> blocks; //blocks with pending comm
+
+	commInitTask(size_t num_blocks_) : hh::AbstractTask<MBD, MBD>("commInit") {
+		num_blocks = num_blocks_;
+	}
 
 	void execute(std::shared_ptr<MBD> matBlock) override {
 		//printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
 		matBlock->initializeComm();
 		this->addResult(matBlock); //push result
+		blocks.push_back(matBlock);
+
+		if(blocks.size() == num_blocks){ //wait until all blocks complete their comm. Make comm progress
+			for(auto &m : blocks)
+				m->waitForComm();
+			blocks.clear();
+		}
 	}
 
 	std::shared_ptr<hh::AbstractTask<MBD, MBD>> copy() override {
-		return std::make_shared<commInitTask<Type, Id, Ord>>();
+		return std::make_shared<commInitTask<Type, Id, Ord>>(num_blocks);
 	}
 };
 
