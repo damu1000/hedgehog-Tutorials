@@ -298,8 +298,8 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	auto copyOutTask = std::make_shared<CudaCopyOutGpuC<MatrixType>>(nBlocks, mBlocks, pBlocks, matC); //pass host block array
 
 	// MemoryManagers
-	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 16, blockSize);
-	auto cudaMemoryManagerB = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'b'>, size_t>>(pBlocks + 16, blockSize);
+	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 32, blockSize);
+	auto cudaMemoryManagerB = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'b'>, size_t>>(pBlocks + 32, blockSize);
 	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(16, blockSize);
 
 	// Connect the memory manager
@@ -375,16 +375,18 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 
 	// Wait for the graph to terminate
 	matrixMultiplicationGraph.waitForTermination();
-
+	checkCudaErrors(cudaDeviceSynchronize());
+	
 	//release comm buffers
 	for(auto &blockA: *matA) blockA->destroyComm(); //is it needed? Will shared pointer automatically deallocate???
 	for(auto &blockB: *matB) blockB->destroyComm();
 	destroyCudaC();
 
+/*
 	int rank;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	matrixMultiplicationGraph.createDotFile(std::string("graph_"  + std::to_string(rank) + ".dot"), hh::ColorScheme::NONE, hh::StructureOptions::ALL);
-
+*/
 }
 
 
@@ -488,7 +490,7 @@ int main(int argc, char **argv)
 
 	}
 	else{//measure performance
-		double seconds = 0, iterations = 1.0;
+		double seconds = 0, iterations = 2.0;
 		struct timeval  tv1, tv2;
 
 //		for(int i=0; i<iterations/2; i++){ //warm up
@@ -502,16 +504,21 @@ int main(int argc, char **argv)
 			matMultHH(n, q, blockSize, numberThreadProduct, numberThreadAddition, matA, matB, matC);
 		}
 		gettimeofday(&tv2, NULL);
-		seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec);
+		seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000.0 + (double) (tv2.tv_sec - tv1.tv_sec);
+		seconds = seconds/ iterations;
 
 		double perProc[3] = {g_setupTime, g_commTime, seconds}, averageTime[3]={0, 0, 0}; //0th is setup time, 1st is comm time, 2nd is total time
 
 		MPI_Reduce(perProc, averageTime, 3, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
 		if(rank==0){
+			averageTime[0] /= (double) size;
+			averageTime[1] /= (double) size;
+			averageTime[2] /= (double) size;
+									
 			printf(" Setup time: %f\n Comm time: %f seconds\n Comp time: %f seconds\n Total time: %f seconds\n",
-					averageTime[0]/(double)size/iterations, averageTime[1]/(double)size/iterations, (averageTime[2]-averageTime[0]-averageTime[1])/(double)size/iterations, averageTime[2]/(double)size/iterations  );
-			printf("GFLOPS / GPU: %f\n", computeMatrixMultiplicationGFLOPS(N, N, N, averageTime[2]/(double)size/iterations));
+					averageTime[0], averageTime[1], (averageTime[2]-averageTime[0]-averageTime[1]), averageTime[2]  );
+			printf("GFLOPS / GPU: %f\n", computeMatrixMultiplicationGFLOPS(N, N, N, averageTime[2]) / size ); //divide by size to get per GPU time
 		}
 	}
 
