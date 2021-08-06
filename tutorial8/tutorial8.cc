@@ -271,6 +271,23 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	cudaStreams::createStreams(nBlocks, pBlocks);
 	auto dMatC = asyncCopyInC(matC, blockSize); //initiate one time h2d copy for c using respective stream
 
+	struct timeval  tv1, tv2;
+
+	gettimeofday(&tv1, NULL);
+	//setup Cannon's algo. Initial alignment
+	for(auto &mb: *matA)
+		mb->setupCommPackage(nBlocks, mBlocks, 1);
+	for(auto &mb: *matB)
+		mb->setupCommPackage(nBlocks, mBlocks, 1);
+
+	for(auto &mb: *matA)
+		mb->finalizeSetupComm(1);
+	for(auto &mb: *matB)
+		mb->finalizeSetupComm(1);
+
+	gettimeofday(&tv2, NULL);
+	g_setupTime = g_setupTime + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000.0 + (double) (tv2.tv_sec - tv1.tv_sec);
+
 	// Graph
 	auto matrixMultiplicationGraph =
 			hh::Graph<MatrixBlockData<MatrixType, 'c', Ord>, //output of graph
@@ -300,7 +317,7 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	// MemoryManagers
 	auto cudaMemoryManagerA = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'a'>, size_t>>(nBlocks + 32, blockSize);
 	auto cudaMemoryManagerB = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'b'>, size_t>>(pBlocks + 32, blockSize);
-	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(16, blockSize);
+	auto cudaMemoryManagerProduct = std::make_shared<hh::StaticMemoryManager<CudaMatrixBlockData<MatrixType, 'p'>, size_t>>(32, blockSize);
 
 	// Connect the memory manager
 	productTask->connectMemoryManager(cudaMemoryManagerProduct);
@@ -378,9 +395,12 @@ void matMultHH(size_t n, int q, size_t blockSize, size_t numberThreadProduct, si
 	checkCudaErrors(cudaDeviceSynchronize());
 	
 	//release comm buffers
+	gettimeofday(&tv1, NULL);
 	for(auto &blockA: *matA) blockA->destroyComm(); //is it needed? Will shared pointer automatically deallocate???
 	for(auto &blockB: *matB) blockB->destroyComm();
 	destroyCudaC();
+	gettimeofday(&tv2, NULL);
+	g_setupTime = g_setupTime + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000.0 + (double) (tv2.tv_sec - tv1.tv_sec);
 
 /*
 	int rank;
@@ -506,6 +526,7 @@ int main(int argc, char **argv)
 		gettimeofday(&tv2, NULL);
 		seconds = seconds + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000.0 + (double) (tv2.tv_sec - tv1.tv_sec);
 		seconds = seconds/ iterations;
+		g_setupTime = g_setupTime / iterations;
 
 		double perProc[3] = {g_setupTime, g_commTime, seconds}, averageTime[3]={0, 0, 0}; //0th is setup time, 1st is comm time, 2nd is total time
 
@@ -518,7 +539,9 @@ int main(int argc, char **argv)
 									
 			printf(" Setup time: %f\n Comm time: %f seconds\n Comp time: %f seconds\n Total time: %f seconds\n",
 					averageTime[0], averageTime[1], (averageTime[2]-averageTime[0]-averageTime[1]), averageTime[2]  );
-			printf("GFLOPS / GPU: %f\n", computeMatrixMultiplicationGFLOPS(N, N, N, averageTime[2]) / size ); //divide by size to get per GPU time
+
+			printf("Comp : GFLOPS / GPU: %f\n", computeMatrixMultiplicationGFLOPS(N, N, N, (averageTime[2]-averageTime[0]-averageTime[1])) / size ); //divide by size to get per GPU time
+			printf("Total: GFLOPS / GPU: %f\n", computeMatrixMultiplicationGFLOPS(N, N, N, averageTime[2]) / size ); //divide by size to get per GPU time
 		}
 	}
 

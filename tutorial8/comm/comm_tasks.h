@@ -40,17 +40,23 @@ public:
 	}
 
 	void execute(std::shared_ptr<std::vector<std::shared_ptr<MBD>>> matBlocksVec) override {
-		//printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
-		auto matBlocks = *matBlocksVec;
-
-		for(auto &mb: matBlocks)
-			mb->setupCommPackage(numBlocksRows, numBlocksCols, setupComm);
-
-		for(auto &mb: matBlocks){
-			mb->finalizeSetupComm(setupComm);
+		for(auto &mb: *matBlocksVec)
 			this->addResult(mb); //push result
-		}
 	}
+
+
+//	void execute(std::shared_ptr<std::vector<std::shared_ptr<MBD>>> matBlocksVec) override {
+//		//printf("Executing task: '%s', function '%s' at %s:%d\n", std::string(this->name()).c_str(), __FUNCTION__,  __FILE__, __LINE__ ) ;
+//		auto matBlocks = *matBlocksVec;
+//
+//		for(auto &mb: matBlocks)
+//			mb->setupCommPackage(numBlocksRows, numBlocksCols, setupComm);
+//
+//		for(auto &mb: matBlocks){
+//			mb->finalizeSetupComm(setupComm);
+//			this->addResult(mb); //push result
+//		}
+//	}
 
 	std::shared_ptr<hh::AbstractTask<MBD, std::vector<std::shared_ptr<MBD>>>> copy() override {
 		return std::make_shared<commSetupTask<Type, Id, Ord>>(numBlocksRows, numBlocksCols, setupComm);
